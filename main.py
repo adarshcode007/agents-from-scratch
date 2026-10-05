@@ -1,5 +1,3 @@
-from ast import List
-from pydantic import HttpUrl
 import json
 from datetime import datetime
 from dotenv import load_dotenv
@@ -7,14 +5,15 @@ from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from groq import Groq
 
+from db import init_db, db_save_note, db_search_notes, db_save_message, db_get_messages
+
 # Load .env file
 load_dotenv()
+init_db()
 
 # Initialize FastAPI and Groq
 app = FastAPI(title="Assistant Agent")
 client = Groq()
-
-notes = []
 
 # 1. The actual Python function
 def get_current_time():
@@ -23,15 +22,12 @@ def get_current_time():
 
 def save_note(text: str):
     """Saves the response to the notes list"""
-    notes.append(text)
+    db_save_note(text)
     return f"Note saved: {text}"
 
 def search_notes(query: str):
     """Search the notes by its keyword."""
-    results = []
-    for note in notes:
-        if query.lower() in note.lower():
-            results.append(note)
+    results = db_search_notes(query)
     if results:
         return f"Note found: {', '.join(results)}"
     return f"No notes found with the keyword {query}"
@@ -92,6 +88,7 @@ tools_schema = [
 ]
 
 class ChatRequest(BaseModel):
+    session_id: str = "default"
     message: str
 
 class ChatResponse(BaseModel):
@@ -100,17 +97,21 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    # 1. Initialize message list with system prompt and user input
+    # 1. Fetch recent history from DB and save the new user message
+    history = db_get_messages(req.session_id, limit=10)
+    user_turn = {"role": "user", "content": req.message}
+    db_save_message(req.session_id, user_turn)
+
+    # 2. Build the messages list: System prompt + DB History + Current User turn
     messages = [
-        {"role": "system", "content":"You are a helpful personal assistant."},
-        {"role":"user", "content": req.message}
-    ]
+        {"role": "system", "content": "You are a helpful personal assistant."}
+    ] + history + [user_turn]
 
     max_iterations = 5
     iteration = 0
 
     while iteration < max_iterations:
-        # 2. Call the LLM with available tools
+        # 3. Call the LLM with available tools
         completion = client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=messages,
@@ -119,14 +120,19 @@ def chat(req: ChatRequest):
 
         response_message = completion.choices[0].message
 
-        # 3. Always append the assistant's turn into conversation history
+        # 4. Save the assistant response to DB and local loop history
+        db_save_message(req.session_id, {
+            "role": "assistant",
+            "content": response_message.content,
+            "tool_calls": response_message.tool_calls
+        })
         messages.append(response_message)
 
-        # 4. If the model did not call any tools, it answered with text -> we're done!
+        # 5. If the model did not call any tools, return final text
         if not response_message.tool_calls:
-            return ChatResponse(response=response_message.content)
+            return ChatResponse(response=response_message.content or "")
         
-        # 5. If tools were called called, execute each one
+        # 6. If tools were called, execute each one
         for tool_call in response_message.tool_calls:
             tool_name = tool_call.function.name
             tool_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
@@ -137,13 +143,15 @@ def chat(req: ChatRequest):
             else:
                 tool_result = f"Error: Tool '{tool_name}' does not exist."
 
-            # 6. Append tool result message with role="tool"
-            messages.append({
+            # 7. Build tool message, persist to DB, and append to local loop
+            tool_turn = {
                 "role": "tool",
                 "tool_call_id": tool_call.id,
                 "name": tool_name,
                 "content": str(tool_result)
-            })
+            }
+            db_save_message(req.session_id, tool_turn)
+            messages.append(tool_turn)
         
         iteration += 1
     raise HTTPException(status_code=500, detail="Agent loop exceeded maximum iterations")
@@ -151,5 +159,6 @@ def chat(req: ChatRequest):
 
 @app.get("/notes", response_model=list[str])
 def get_all_notes():
-    return notes
+    return db_search_notes("")
+
     

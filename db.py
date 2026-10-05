@@ -47,23 +47,24 @@ def db_save_note(text: str) -> str:
         return f"Note saved successfully: '{text}'"
 
 def db_search_notes(query: str) -> list[str]:
-    with get_connection as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         if query:
             cursor.execute("SELECT * FROM notes WHERE text like ? ORDER BY id DESC", (f"%{query}%",))
         else:
             cursor.execute("SELECT text FROM notes ORDER BY id DESC")
-            rows = cursor.fetchall()
-            return [row["text"] for row in rows]
+        rows = cursor.fetchall()
+        return [row["text"] for row in rows]
 
 def db_save_message(session_id: str, message: dict):
     """Saves a message dictionary into the database."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        # If the message has tool_calls objects, convert them to JSON string
-        tool_calls_json = json.dumps([
-            tc if isinstance(tc, dict) else tc.model_dump() for tc in message["tool_calls"]
-        ])
+        tool_calls_json = None
+        if message.get("tool_calls"):
+            tool_calls_json = json.dumps([
+                tc if isinstance(tc, dict) else tc.model_dump() for tc in message["tool_calls"]
+            ])
 
         cursor.execute("""
             INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, name)
