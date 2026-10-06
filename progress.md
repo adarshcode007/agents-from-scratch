@@ -4,10 +4,10 @@ This document maps out the essential competencies, architectural patterns, and p
 
 ---
 
-## 📍 Current Status: `Phase 1 (Memory & Context Management)` — ~85% Complete
+## 📍 Current Status: `Phase 2 (Planning, Structured Outputs & Reasoning)` — Ready to Start 🚀
 
 ```
-[✅ Phase 0] ──▶ [🟡 Phase 1] ──▶ [⏳ Phase 2] ──▶ [⏳ Phase 3] ──▶ [⏳ Phase 4] ──▶ [⏳ Phase 5] ──▶ [💼 Portfolio]
+[✅ Phase 0] ──▶ [✅ Phase 1] ──▶ [🟡 Phase 2] ──▶ [⏳ Phase 3] ──▶ [⏳ Phase 4] ──▶ [⏳ Phase 5] ──▶ [💼 Portfolio]
 Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Production Ops    Advanced RAG      Capstones
 ```
 
@@ -25,12 +25,12 @@ Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Productio
 
 ---
 
-### Phase 1: Memory Architectures & Context Engineering (IN PROGRESS 🟡 - YOU ARE HERE)
+### Phase 1: Memory Architectures & Context Engineering (COMPLETED ✅)
 *Giving agents short-term conversational context and long-term persistent recall.*
-- [x] **Short-Term Session History**: Storing raw multi-turn conversation logs in SQLite and querying with sliding windows (`LIMIT 10`).
+- [x] **Short-Term Session History**: Storing raw multi-turn conversation logs in SQLite and querying with sliding windows (`LIMIT 6`).
 - [x] **Long-Term Memory Injection**: The `remember(fact)` tool saving durable user traits and injecting them into the system prompt across sessions.
 - [x] **Context Window Compaction / Rolling Summarization**: Triggering background LLM summarization when chat history exceeds token limits so the agent never forgets older topics.
-- [ ] **Semantic Memory Search (Vector Embeddings)**: Storing memories with embeddings (`sqlite-vec` or Chroma) to retrieve the top-$K$ most relevant facts rather than injecting everything.
+- [x] **Semantic Memory Search (Vector Embeddings)**: Storing memories with embeddings (`FastEmbed` ONNX) and cosine similarity to retrieve the top-$K$ most relevant facts dynamically.
 
 ---
 

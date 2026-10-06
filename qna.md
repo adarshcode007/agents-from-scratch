@@ -47,6 +47,31 @@
 
 ---
 
+### Q12: How does Rolling Summarization scale when a conversation reaches 200+ messages?
+**A:** 
+- Instead of reprocessing all 200 messages, it takes the **existing summary** (which already condensed messages 1–190) plus the **latest chunk of messages (191–200)** to generate the updated summary.
+- This achieves **$O(1)$ constant prompt size** for compaction, meaning context compression costs stay flat whether the conversation has 50 turns or 5,000 turns.
+
+---
+
+### Q13: What is the fundamental difference between Keyword Search and Semantic Vector Search?
+**A:** 
+- **Keyword Search (`LIKE '%...%'` / BM25)**: Matches exact words or character substrings. It fails when different words share the same meaning (e.g., `"car"` vs. `"automobile"`).
+- **Semantic Vector Search**: Uses an embedding model to convert text into mathematical coordinates (vectors). Texts with similar conceptual meanings have high **cosine similarity** (close distance in vector space), enabling meaning-based retrieval regardless of wording.
+
+---
+
+### Q14: What are Embeddings, what does Similarity Threshold mean, and how does FastEmbed compare to OpenAI?
+**A:** 
+- **Embeddings**: High-dimensional numerical vectors representing text meaning, where conceptual similarity corresponds to geometric proximity (measured via Cosine Similarity from `-1.0` to `1.0`).
+- **Threshold (e.g. 0.3)**: A noise filter. Prevents forcing irrelevant memories into the context window when the user's message has no semantic connection to stored facts.
+- **FastEmbed vs OpenAI**: FastEmbed runs locally on CPU via ONNX (~2-5ms latency, $0 cost, completely private, 384-dim). OpenAI embeddings require an external API call (~200ms latency, token cost, 1536-dim).
+
+---
+
+
+
+
 
 
 

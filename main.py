@@ -4,10 +4,11 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from groq import Groq
+from embeddings import get_embedding
 
 from db import (
     init_db, db_save_note, db_search_notes, db_save_message,
-    db_get_messages, db_save_memory, db_get_memories,
+    db_get_messages, db_save_memory, db_get_memories, db_search_memories,
     db_add_task, db_list_tasks, db_complete_task,
     db_get_session_summary, db_update_session_summary, db_get_message_count
 )
@@ -39,7 +40,8 @@ def search_notes(query: str):
 
 def remember(fact: str):
     """Remembers the fact requested by the user"""
-    return db_save_memory(fact)
+    vector = get_embedding(fact)
+    return db_save_memory(fact, embedding=vector)
 
 def add_task(title: str, due_date: str = None, description: str = None):
     """Add a new task with optional due date and description."""
@@ -247,13 +249,16 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, background_tasks: BackgroundTasks):
-    memories = db_get_memories()
+    # Semantic vector search for relevant memories
+    query_vector = get_embedding(req.message)
+    relevant_memories = db_search_memories(query_vector, top_k=3, threshold=0.3)
+
     summary = db_get_session_summary(req.session_id)
 
     system_content = "You are a helpful personal assistant."
 
-    if memories:
-        system_content += "\n\nKnown facts about the user:\n" + "\n".join(["-" + m for m in memories])
+    if relevant_memories:
+        system_content += "\n\nKnown facts about the user:\n" + "\n".join(["-" + m for m in relevant_memories])
     
     if summary:
         system_content += f"\n\nSummary of earlier conversation:\n{summary}"
@@ -350,3 +355,8 @@ def get_all_tasks():
 def get_session_summary(session_id: str):
     """Inspect the current rolling summary for a session."""
     return {"session_id": session_id, "summary": db_get_session_summary(session_id)}
+
+@app.post("/memory")
+def get_relevant_memories(req: ChatRequest):
+    query_vector = get_embedding(req.message)
+    return db_search_memories(query_vector, top_k=3, threshold=0.3)

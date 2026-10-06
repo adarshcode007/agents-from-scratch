@@ -1,6 +1,8 @@
 import sqlite3
 import json
 
+from embeddings import cosine_similarity
+
 DB_FILE = "assistant.db"
 
 def get_connection():
@@ -42,9 +44,15 @@ def init_db():
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 fact TEXT NOT NULL,
+                embedding TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        try:
+            cursor.execute("ALTER TABLE memories ADD COLUMN embedding TEXT")
+        except sqlite3.OperationalError:
+            pass # column already exists
 
         # Table 4: Tasks ()
         cursor.execute("""
@@ -131,16 +139,36 @@ def db_get_messages(session_id: str, limit: int = 10) -> list[dict]:
         
     return messages
 
-
-
-def db_save_memory(fact: str):
+def db_save_memory(fact: str, embedding: list[float] = None) -> str:
+    embedding_json = json.dumps(embedding) if embedding else None
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO memories (fact) VALUES (?)
-        """,(fact,))
+            INSERT INTO memories (fact, embedding) VALUES (?, ?)
+        """,(fact, embedding_json))
         conn.commit()
     return f"Remembered: {fact}"
+
+def db_search_memories(query_embedding: list[float], top_k: int = 3, threshold: float = 0.3) -> list[str]:
+    """Find the top-K most semantically relevant memories using cosine similarity."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT fact, embedding FROM memories WHERE embedding IS NOT NULL")
+        rows = cursor.fetchall()
+    
+    scored_memories = []
+    for row in rows:
+        if row["embedding"]:
+            mem_vec = json.loads(row["embedding"])
+            similarity = cosine_similarity(query_embedding, mem_vec)
+            if similarity >= threshold:
+                scored_memories.append((similarity, row["fact"]))
+    
+    # sort by highest similarity score first
+    scored_memories.sort(key=lambda x: x[0], reverse=True)
+
+    # Return only the top-K facts
+    return [fact for score, fact in scored_memories[:top_k]]
 
 def db_get_memories() -> list[str]:
     with get_connection() as conn:
