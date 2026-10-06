@@ -2,13 +2,14 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from groq import Groq
 
 from db import (
     init_db, db_save_note, db_search_notes, db_save_message,
     db_get_messages, db_save_memory, db_get_memories,
-    db_add_task, db_list_tasks, db_complete_task
+    db_add_task, db_list_tasks, db_complete_task,
+    db_get_session_summary, db_update_session_summary, db_get_message_count
 )
 
 # Load .env file
@@ -62,6 +63,44 @@ def list_tasks(status: str = "pending"):
 def complete_task(task_id: int):
     """Mark a specific task ID as done."""
     return db_complete_task(task_id)
+
+def compact_session_history(session_id: str):
+    """Summarizes older conversation turns if message count exceeds threshold."""
+    count = db_get_message_count(session_id)
+
+    # Only run when count is greater than 10, then once every 10 messages to prevent over-summarizing
+    if count >= 10 and count % 10 == 0:
+        old_summary = db_get_session_summary(session_id)
+        all_messages = db_get_messages(session_id, limit=30)
+        messages_text = "\n".join([
+            f"{m['role'].upper()}: {m.get('content', '[Tool Call]')}"
+            for m in all_messages if m.get('content')
+        ])
+        summary_prompt = f"""
+            You are an expert conversation summarizer.
+
+            Current existing summary:
+            "{old_summary}"
+
+            New conversation messages to incorporate:
+            {messages_text}
+
+            Task: Provide an updated, concise, high-density summary of the conversation so far.
+            Keep key decisions, user constraints, tasks mentioned, and personal context.
+            Return ONLY the summary paragraph.
+        """
+
+        # Call LLM to generate the summary
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[
+                {"role": "user", "content": summary_prompt}
+            ]
+        )
+        new_summary = response.choices[0].message.content
+
+        # Save updated summary into SQLite
+        db_update_session_summary(session_id, new_summary)
 
 # 2. A Dictonary that maps tool names to the actual functions
 available_tools = {
@@ -207,15 +246,20 @@ class ChatResponse(BaseModel):
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, background_tasks: BackgroundTasks):
     memories = db_get_memories()
+    summary = db_get_session_summary(req.session_id)
+
     system_content = "You are a helpful personal assistant."
 
     if memories:
         system_content += "\n\nKnown facts about the user:\n" + "\n".join(["-" + m for m in memories])
     
+    if summary:
+        system_content += f"\n\nSummary of earlier conversation:\n{summary}"
+    
     # 1. Fetch recent history from DB and save the new user message
-    history = db_get_messages(req.session_id, limit=10)
+    history = db_get_messages(req.session_id, limit=6)
     user_turn = {"role": "user", "content": req.message}
     db_save_message(req.session_id, user_turn)
 
@@ -245,20 +289,32 @@ def chat(req: ChatRequest):
         })
         messages.append(response_message)
 
-        # 5. If the model did not call any tools, return final text
+        # 5. If the model did not call any tools, queue background compaction and return final text
         if not response_message.tool_calls:
+            background_tasks.add_task(compact_session_history, req.session_id)
             return ChatResponse(response=response_message.content or "")
         
         # 6. If tools were called, execute each one
         for tool_call in response_message.tool_calls:
             tool_name = tool_call.function.name
-            tool_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-
-            if tool_name in available_tools:
-                tool_func = available_tools[tool_name]
-                tool_result = tool_func(**tool_args)
+            
+            # 6a. Defensively parse arguments
+            try:
+                tool_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+            except json.JSONDecodeError:
+                tool_result = f"Error: Invalid JSON arguments provided for tool '{tool_name}'."
             else:
-                tool_result = f"Error: Tool '{tool_name}' does not exist."
+                # 6b. Defensively execute tool
+                if tool_name in available_tools:
+                    tool_func = available_tools[tool_name]
+                    try:
+                        tool_result = tool_func(**tool_args)
+                    except TypeError as e:
+                        tool_result = f"Error: Invalid parameters for '{tool_name}'. Details: {e}"
+                    except Exception as e:
+                        tool_result = f"Error executing '{tool_name}': {e}"
+                else:
+                    tool_result = f"Error: Tool '{tool_name}' does not exist."
 
             # 7. Build tool message, persist to DB, and append to local loop
             tool_turn = {
@@ -271,6 +327,8 @@ def chat(req: ChatRequest):
             messages.append(tool_turn)
         
         iteration += 1
+    
+    background_tasks.add_task(compact_session_history, req.session_id)
     raise HTTPException(status_code=500, detail="Agent loop exceeded maximum iterations")
 
 
@@ -287,3 +345,8 @@ def get_all_tasks():
     pending_tasks = db_list_tasks('pending')
     done_tasks = db_list_tasks('done')
     return {"pending": pending_tasks, "done": done_tasks}
+
+@app.get("/summary/{session_id}")
+def get_session_summary(session_id: str):
+    """Inspect the current rolling summary for a session."""
+    return {"session_id": session_id, "summary": db_get_session_summary(session_id)}

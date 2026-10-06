@@ -39,5 +39,14 @@
 
 ---
 
+### Q11: Why run Rolling Summarization only when a threshold is reached, instead of on every turn?
+**A:** 
+1. **Speed & Latency**: Summarizing on every user message doubles the API calls and adds latency to every response. Running it only when history exceeds a threshold (e.g., every 10+ turns) keeps normal requests fast.
+2. **Cost Efficiency**: Reduces token burn by compacting batches of messages at once rather than re-summarizing after every single sentence.
+3. **Separation of Concerns**: Keeps the main agent loop focused purely on user interaction and tool execution, while a dedicated prompt handles concise distillation.
+
+---
+
+
 
 

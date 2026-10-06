@@ -57,6 +57,14 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Table 5: Sessions (stores the rolling summary for each session)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                summary TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+        """)
         conn.commit()
 
 
@@ -178,3 +186,38 @@ def db_complete_task(task_id: int) -> str:
         if cursor.rowcount == 0:
             return f"Error: Task with ID {task_id} not found."
     return f"Task {task_id} completed."
+
+def db_get_session_summary(session_id: str) -> str:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT summary FROM sessions
+            WHERE session_id = ?
+        """,(session_id,))
+        row = cursor.fetchall()
+
+        if not row:
+            return ""
+    return row[0]["summary"]
+
+def db_update_session_summary(session_id: str, summary: str):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO sessions (session_id, summary)
+            VALUES (?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                summary = excluded.summary,
+                created_at = CURRENT_TIMESTAMP
+        """,(session_id, summary))
+        conn.commit()
+
+def db_get_message_count(session_id: str) -> int:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM messages WHERE session_id = ?
+        """,(session_id,))
+        row = cursor.fetchone()
+        return row["count"] if row else 0
+
