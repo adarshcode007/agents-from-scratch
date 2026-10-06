@@ -35,14 +35,15 @@ Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Productio
 ---
 
 
-### Phase 2: Structured Outputs, Planning & Task Decomposition (UPCOMING ⏳)
+### Phase 2: Structured Outputs, Planning & Task Decomposition (IN PROGRESS 🟡 - YOU ARE HERE)
 *Moving from reactive tool-calling to proactive multi-step problem solving.*
-- [ ] **Structured Outputs / JSON Mode**: Enforcing strict Pydantic return schemas from the LLM without freeform formatting errors.
+- [x] **Structured Outputs / JSON Mode**: Enforcing strict Pydantic return schemas from the LLM without freeform formatting errors.
 - [ ] **Plan-and-Solve / Scratchpad Pattern**: Prompting the agent to write a structured execution plan before calling tools, updating step status along the way.
 - [ ] **Reflection & Self-Verification**: The agent evaluates its own output against constraints before sending the final answer to the user.
 - [ ] **Human-in-the-Loop (HITL) Approval Gates**: Requiring explicit user confirmation before executing irreversible or high-risk side effects (e.g. database deletes, payments, emails).
 
 ---
+
 
 ### Phase 3: Multi-Agent Systems & Orchestration (UPCOMING ⏳)
 *Building networks of specialized agents that collaborate on complex tasks.*

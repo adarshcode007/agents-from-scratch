@@ -69,6 +69,14 @@
 
 ---
 
+### Q15: Why use Structured Outputs (Pydantic / JSON Mode) instead of prompt-based instructions like "Return JSON"?
+**A:** 
+- Prompting *"Return JSON only"* is prone to failures: models often add markdown ticks (````json ... ````), omit required keys, or generate wrong data types.
+- **Structured Outputs** enforce a mathematical grammar constraint during LLM token generation, guaranteeing 100% syntactically valid JSON that is automatically validated against a strict Pydantic model before downstream execution.
+
+---
+
+
 
 
 

@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from groq import Groq
 from embeddings import get_embedding
+from typing import Literal
 
 from db import (
     init_db, db_save_note, db_search_notes, db_save_message,
@@ -246,6 +247,22 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
 
+class PlannedStep(BaseModel):
+    step_number: int
+    title: str
+    description: str
+    estimated_minute: int
+    priority: Literal["low", "medium", "high"]
+
+class ActionPlan(BaseModel):
+    goal: str
+    summary: str
+    steps: list[PlannedStep]
+    total_estimated_minutes: int
+
+class PlanRequest(BaseModel):
+    goal: str
+
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, background_tasks: BackgroundTasks):
@@ -335,6 +352,34 @@ def chat(req: ChatRequest, background_tasks: BackgroundTasks):
     
     background_tasks.add_task(compact_session_history, req.session_id)
     raise HTTPException(status_code=500, detail="Agent loop exceeded maximum iterations")
+
+@app.post("/plan", response_model=ActionPlan)
+def generate_plan(req: PlanRequest):
+    """Generate a structured, decomposed action plan from a high-level goal."""
+
+    # 1. Provide the exact JSON Schema in the system prompt
+    schema_json = ActionPlan.model_json_schema()
+
+    prompt = f"""You are a master project planner and decomposition engine.
+                Decompose the user's goal into logical, sequential, actionable steps.
+                You MUST reply with a JSON object conforming strictly to this JSON Schema:
+                {json.dumps(schema_json, indent=2)}
+                """
+    
+    # 2. Call the LLM with JSON Mode enabled
+    completion = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[{"role": "system", "content": prompt}, {"role": "user", "content": req.goal}],
+        response_format={"type": "json_object"}
+    )
+
+    # 3. Parse and validate through Pydantic
+    raw_json = completion.choices[0].message.content
+    try:
+        validated_plan = ActionPlan.model_validate_json(raw_json)
+        return validated_plan
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to Validate LLM output: {e}")
 
 
 @app.get("/notes", response_model=list[str])
