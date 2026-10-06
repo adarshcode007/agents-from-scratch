@@ -5,7 +5,11 @@ from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from groq import Groq
 
-from db import init_db, db_save_note, db_search_notes, db_save_message, db_get_messages
+from db import (
+    init_db, db_save_note, db_search_notes, db_save_message,
+    db_get_messages, db_save_memory, db_get_memories,
+    db_add_task, db_list_tasks, db_complete_task
+)
 
 # Load .env file
 load_dotenv()
@@ -32,11 +36,42 @@ def search_notes(query: str):
         return f"Note found: {', '.join(results)}"
     return f"No notes found with the keyword {query}"
 
+def remember(fact: str):
+    """Remembers the fact requested by the user"""
+    return db_save_memory(fact)
+
+def add_task(title: str, due_date: str = None, description: str = None):
+    """Add a new task with optional due date and description."""
+    return db_add_task(title, due_date, description)
+
+def list_tasks(status: str = "pending"):
+    """List tasks filtered by status ('pending' or 'done')."""
+    tasks = db_list_tasks(status)
+    if not tasks:
+        return f"No {status} tasks found."
+    
+    # Format into a clean string for LLM
+    formatted = [
+        f"[ID: {t['id']}] {t['title']}" + 
+        (f" (Due: {t['due_date']})" if t['due_date'] else "") + 
+        (f" - {t['description']}" if t.get('description') else "")
+        for t in tasks
+    ]
+    return f"Tasks ({status}):\n" + "\n".join(formatted)
+
+def complete_task(task_id: int):
+    """Mark a specific task ID as done."""
+    return db_complete_task(task_id)
+
 # 2. A Dictonary that maps tool names to the actual functions
 available_tools = {
     "get_current_time": get_current_time,
     "save_note": save_note,
     "search_notes": search_notes,
+    "remember": remember,
+    "add_task": add_task,
+    "list_tasks": list_tasks,
+    "complete_task": complete_task,
 }
 
 tools_schema = [
@@ -84,6 +119,82 @@ tools_schema = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": "Remember the facts given by the user when they explicitly ask to remember.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fact": {
+                        "type": "string",
+                        "description": "The fact to be remembered."
+                    }
+                },
+                "required": ["fact"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_task",
+            "description": "Add a new task with optional due date and description when they ask to add a task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "The title of the task."
+                    },
+                    "due_date": {
+                        "type": "string",
+                        "description": "Due date in ISO format (YYYY-MM-DD or YYYY-MM-DD HH:MM). Use get_current_time first if you need to calculate relative dates like 'tomorrow' or 'next Monday'."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "The description of the task."
+                    }
+                },
+                "required": ["title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tasks",
+            "description": "List tasks filtered by status ('pending' or 'done').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "The status of the task."
+                    }
+                },
+                "required": ["status"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_task",
+            "description": "Mark a specific task ID as done.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "The ID of the task to complete."
+                    }
+                },
+                "required": ["task_id"]
+            }
+        }
     }
 ]
 
@@ -97,6 +208,12 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    memories = db_get_memories()
+    system_content = "You are a helpful personal assistant."
+
+    if memories:
+        system_content += "\n\nKnown facts about the user:\n" + "\n".join(["-" + m for m in memories])
+    
     # 1. Fetch recent history from DB and save the new user message
     history = db_get_messages(req.session_id, limit=10)
     user_turn = {"role": "user", "content": req.message}
@@ -104,7 +221,7 @@ def chat(req: ChatRequest):
 
     # 2. Build the messages list: System prompt + DB History + Current User turn
     messages = [
-        {"role": "system", "content": "You are a helpful personal assistant."}
+        {"role": "system", "content": system_content}
     ] + history + [user_turn]
 
     max_iterations = 5
@@ -161,4 +278,12 @@ def chat(req: ChatRequest):
 def get_all_notes():
     return db_search_notes("")
 
-    
+@app.get("/memories", response_model=list[str])
+def get_all_memories():
+    return db_get_memories()
+
+@app.get("/tasks", response_model = dict)
+def get_all_tasks():
+    pending_tasks = db_list_tasks('pending')
+    done_tasks = db_list_tasks('done')
+    return {"pending": pending_tasks, "done": done_tasks}

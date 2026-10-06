@@ -36,6 +36,27 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Table 3: Memories (Facts to be remembered)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fact TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Table 4: Tasks ()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT,
+                due_date TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 
@@ -101,3 +122,59 @@ def db_get_messages(session_id: str, limit: int = 10) -> list[dict]:
         messages.append(msg)
         
     return messages
+
+
+
+def db_save_memory(fact: str):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO memories (fact) VALUES (?)
+        """,(fact,))
+        conn.commit()
+    return f"Remembered: {fact}"
+
+def db_get_memories() -> list[str]:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT fact FROM memories
+        """)
+        rows = cursor.fetchall()
+    return [row["fact"] for row in rows]
+
+
+def db_add_task(title: str, due_date: str = None, description: str = None) -> str:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO tasks (title, due_date, description)
+            VALUES (?, ?, ?)
+        """,(title, due_date, description))
+        conn.commit()
+    return f"Task added: {title}"
+
+def db_list_tasks(status: str = "pending") -> list[dict]:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, title, due_date, status, description from tasks
+            WHERE status = ?
+            ORDER BY due_date 
+        """,(status,))
+        rows = cursor.fetchall()
+    return [dict(row) for row in rows]
+
+def db_complete_task(task_id: int) -> str:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE tasks SET status = 'done'
+            WHERE id = ?
+        """,(task_id,))
+        conn.commit()
+
+        # Check if any row was updated
+        if cursor.rowcount == 0:
+            return f"Error: Task with ID {task_id} not found."
+    return f"Task {task_id} completed."
