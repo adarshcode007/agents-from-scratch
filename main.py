@@ -263,6 +263,20 @@ class ActionPlan(BaseModel):
 class PlanRequest(BaseModel):
     goal: str
 
+# For Plan-and-Solve
+class StepExecutionResult(BaseModel):
+    step_number: int
+    title: str
+    status: str # "completed" | "failed"
+    tool_action: str
+
+class PlanExecutionResponse(BaseModel):
+    goal: str
+    plan_summary: str
+    total_steps: int
+    executed_steps: list[StepExecutionResult]
+    final_message: str
+
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, background_tasks: BackgroundTasks):
@@ -380,6 +394,45 @@ def generate_plan(req: PlanRequest):
         return validated_plan
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to Validate LLM output: {e}")
+
+@app.post("/plan-and-execute", response_model=PlanExecutionResponse)
+def plan_and_execute(req: PlanRequest):
+    """
+    Plan-and-Solve Pattern:
+    1. Plan: Decompose goal into typed Pydantic ActionPlan.
+    2. Solve: Iterate through planned steps, creating tasks/notes in SQLite.
+    3. Synthesize: Return structured execution results.
+    """
+    # 1. Generate the Plan
+    plan = generate_plan(req)
+
+    executed_results = []
+
+    # 2. Execute each step
+    for step in plan.steps:
+        # Automatically register each step as an actionable task in SQLite
+        tool_res = db_add_task(
+            title=step.title,
+            due_date=None,
+            description=f"Priority: {step.priority} | Est: {step.estimated_minute}m - {step.description}"
+        )
+
+        executed_results.append(StepExecutionResult(
+            step_number=step.step_number,
+            title=step.title,
+            status="completed",
+            tool_action=tool_res
+        ))
+    
+    db_save_note(f"Plan created for goal: '{plan.goal}'. Total steps: {len(plan.steps)}")
+
+    return PlanExecutionResponse(
+        goal=plan.goal,
+        plan_summary=plan.summary,
+        total_steps=len(plan.steps),
+        executed_steps=executed_results,
+        final_message=f"Successfully decomposed and created {len(plan.steps)} actionable tasks in your database."
+    )
 
 
 @app.get("/notes", response_model=list[str])

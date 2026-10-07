@@ -76,6 +76,14 @@
 
 ---
 
+### Q16: Why does the Plan-and-Solve / Scratchpad pattern outperform pure ReAct on complex tasks?
+**A:** 
+- Pure ReAct is greedy and easily forgets multi-step goals, executes steps out of order, or gets trapped in redundant tool loops.
+- **Plan-and-Solve** creates an explicit checklist in context (*Working Memory*), enabling the agent to track progress (`[x]` vs `[ ]`), resolve step dependencies, and stay focused across 5+ iterations.
+
+---
+
+
 
 
 

@@ -64,3 +64,22 @@ The Golden Architecture:
 Short-Term Memory: Last 10–20 messages from SQLite (sliding window).
 
 Long-Term Memory: Durable facts stored separately and injected into the system prompt.
+
+
+### Here is how FastAPI's BackgroundTasks works:
+
+1. The Lifecycle (When it runs):
+- When you call background_tasks.add_task(compact_session_history, req.session_id), FastAPI schedules the task.
+- FastAPI first sends the 200 OK response JSON to the user immediately.
+- Only AFTER the user has received their answer on their screen does FastAPI run compact_session_history in the background.
+
+2. The User Experience Difference:
+- Without BackgroundTasks (Synchronous):
+    - Main chat model runs: 0.8 seconds
+    - Summarizer model runs: 1.5 seconds
+    - 👉 Total user waiting time: 2.3 seconds (user stares at a loading spinner for 2.3s)
+
+- With BackgroundTasks:
+    - Main chat model runs: 0.8 seconds
+    - 👉 User gets the answer in 0.8s! 🚀
+    - The summarizer runs silently in the background while the user is already reading their response.    
