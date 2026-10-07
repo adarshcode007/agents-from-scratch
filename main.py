@@ -277,6 +277,23 @@ class PlanExecutionResponse(BaseModel):
     executed_steps: list[StepExecutionResult]
     final_message: str
 
+# For Reflect and Generate
+class ReflectionRequest(BaseModel):
+    task: str
+    criteria: list[str]
+
+class CritiqueResult(BaseModel):
+    passed: bool
+    critique: str
+    issues_found: list[str]
+
+class ReflectionResponse(BaseModel):
+    task: str
+    initial_draft: str
+    critique: CritiqueResult
+    final_output: str
+    refined: bool
+
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, background_tasks: BackgroundTasks):
@@ -434,6 +451,79 @@ def plan_and_execute(req: PlanRequest):
         final_message=f"Successfully decomposed and created {len(plan.steps)} actionable tasks in your database."
     )
 
+@app.post("/reflect-and-generate", response_model=ReflectionResponse)
+def reflect_and_generate(req: ReflectionRequest):
+    """
+    Reflection / Evaluator-Optimizer Loop:
+    1. Generator: Drafts initial response.
+    2. Critic: Evaluates draft against criteria using Structured Outputs.
+    3. Refiner: If critic finds issues, revises the draft before returning.
+    """
+    criteria_list = "\n".join(f"- {c}" for c in req.criteria)
+
+    # 1. GENERATOR: Create initial draft
+    gen_resp = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[
+            {"role": "system", "content": f"You are a specialized content creator. Complete the user's task strictly adhering to these criteria:\n{criteria_list}"},
+            {"role": "user", "content": req.task}
+        ]
+    )
+    initial_draft = gen_resp.choices[0].message.content
+
+    # 2. CRITIC: Stirctly audit the draft against criteria using Strucutred JSON
+    critic_schema = CritiqueResult.model_json_schema()
+    critic_prompt = f"""
+        You are a ruthless quality control evaluator and compilance auditor.
+        Audit the following draft against the required criteria.
+
+        CRITERIA: {criteria_list}
+        DRAFT TO AUDIT: \"\"\"{initial_draft}\"\"\"
+
+        Reply with a JSON object confirming stricly to this JSON Schema: {json.dumps(critic_schema, indent=2)}
+    """
+    critic_resp = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages= [
+            {"role": "user", "content": critic_prompt}
+        ],
+        response_format={"type": "json_object"}
+    )
+
+    critique = CritiqueResult.model_validate_json(critic_resp.choices[0].message.content)
+
+    # 3. REFINER: If failed, rewrite the draft addressing all critique points
+    if not critique.passed:
+        issues_text = "\n".join(f"- {issue}" for issue in critique.issues_found)
+        refiner_prompt = f"""
+            You are a master editor. The previous draft was rejected by the QA Critic.
+
+            ORIGINAL TASK: {req.task}
+            CRITIQUE & ISSUES TO FIX: {issues_text}
+
+            PREVIOUS DRAFT: \"\"\"{initial_draft}\"\"\"
+
+            Task: Rewrite the draf to completely fix every issue while satisfying all criteria.
+            Return ONLY the perfected final draft.
+        """
+
+        refined_resp = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[{"role": "user", "content": refiner_prompt}]
+        )
+        final_output = refined_resp.choices[0].message.content
+        refined = True
+    else:
+        final_output = initial_draft
+        refined = False
+    
+    return ReflectionResponse(
+        task=req.task,
+        initial_draft=initial_draft,
+        critique=critique,
+        final_output=final_output,
+        refined=refined
+    )
 
 @app.get("/notes", response_model=list[str])
 def get_all_notes():

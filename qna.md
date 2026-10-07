@@ -83,6 +83,23 @@
 
 ---
 
+### Q17: Why is a separate Critic (Reflection loop) superior to single-pass generation?
+**A:** 
+- **Single-Pass Blind Spot**: LLMs generate text token-by-token and cannot backtrack to fix mistakes made earlier in the paragraph.
+- **Evaluator-Optimizer Pattern**: Isolates creation from quality assurance. The Generator produces a candidate draft, and the Critic systematically checks the completed text against constraints (tone, length, required facts), allowing a Refiner step to correct flaws before the user sees the output.
+
+---
+
+### Q18: What if the Refiner also makes a mistake during reflection?
+**A:** 
+1. **Iterative Refinement**: Wrap the Critic $\rightarrow$ Refiner cycle in a bounded `while` loop (e.g. `max_retries = 3`), giving the refiner up to 3 attempts to satisfy the critic.
+2. **Deterministic Code Gates**: Augment LLM critique with deterministic Python code assertions (word count checks, regex rules, unit tests) for 100% mathematical guarantees.
+3. **Human Escalation (HITL)**: If multiple refinement rounds fail, flag the item for human review rather than outputting unchecked failures.
+
+---
+
+
+
 
 
 

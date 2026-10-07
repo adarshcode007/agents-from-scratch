@@ -83,3 +83,34 @@ Long-Term Memory: Durable facts stored separately and injected into the system p
     - Main chat model runs: 0.8 seconds
     - 👉 User gets the answer in 0.8s! 🚀
     - The summarizer runs silently in the background while the user is already reading their response.    
+
+
+
+### reflect and critique with json output
+
+sample input:
+```json
+{
+    "task": "Write an apology email to enterprise clients about a 30-minute server downtime.",
+    "criteria": [
+        "Must offer a 15% discount on next month invoice",
+        "Must explain that a database failover caused the issue",
+        "Must be under 75 words in total length"
+    ]
+}
+```
+
+sample output:
+```json
+{
+    "task": "Write an apology email to enterprise clients about a 30-minute server downtime.",
+    "initial_draft": "Subject: Apology for Recent Downtime\n\nDear [Client],\n\nWe sincerely apologize for the 30‑minute outage on [date]. The interruption was caused by an unexpected database failover that disrupted services. We’ve resolved the issue and enhanced monitoring to prevent recurrence. As a token of our regret, we’ll apply a 15% discount to your next month’s invoice. Thank you for your understanding and continued partnership.\n\nBest regards,  \n[Name]  \n[Company]",
+    "critique": {
+        "passed": true,
+        "critique": "The draft meets all required criteria: it offers a 15% discount, explains a database failover as the cause, and contains 61 words, which is under the 75‑word limit.",
+        "issues_found": []
+    },
+    "final_output": "Subject: Apology for Recent Downtime\n\nDear [Client],\n\nWe sincerely apologize for the 30‑minute outage on [date]. The interruption was caused by an unexpected database failover that disrupted services. We’ve resolved the issue and enhanced monitoring to prevent recurrence. As a token of our regret, we’ll apply a 15% discount to your next month’s invoice. Thank you for your understanding and continued partnership.\n\nBest regards,  \n[Name]  \n[Company]",
+    "refined": false
+}
+```

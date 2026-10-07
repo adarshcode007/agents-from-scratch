@@ -39,10 +39,11 @@ Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Productio
 *Moving from reactive tool-calling to proactive multi-step problem solving.*
 - [x] **Structured Outputs / JSON Mode**: Enforcing strict Pydantic return schemas from the LLM without freeform formatting errors.
 - [x] **Plan-and-Solve / Scratchpad Pattern**: Prompting the agent to write a structured execution plan before calling tools, updating step status along the way.
-- [ ] **Reflection & Self-Verification**: The agent evaluates its own output against constraints before sending the final answer to the user.
+- [x] **Reflection & Self-Verification**: The agent evaluates its own output against constraints before sending the final answer to the user.
 - [ ] **Human-in-the-Loop (HITL) Approval Gates**: Requiring explicit user confirmation before executing irreversible or high-risk side effects (e.g. database deletes, payments, emails).
 
 ---
+
 
 
 
