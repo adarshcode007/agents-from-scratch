@@ -98,6 +98,14 @@
 
 ---
 
+### Q19: Why are Human-in-the-Loop (HITL) Approval Gates critical for destructive tools?
+**A:** 
+- **Safety**: Prevents irreversible data loss or unauthorized actions (e.g., deleting tasks, dropping tables, sending live emails) caused by model hallucinations or ambiguous prompts.
+- **Asynchronous State Persistence**: Storing paused actions in a database (`pending_actions` table) decouples the approval process from short-lived HTTP timeouts, allowing reviewers to audit and approve actions asynchronously.
+
+---
+
+
 
 
 

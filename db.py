@@ -73,6 +73,20 @@ def init_db():
                 summary TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
         """)
+
+        # Table 6: Pending Actions (for Human-in-the-Loop)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_actions (
+                action_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                tool_args TEXT NOT NULL,
+                tool_call_id TEXT NOT NULL,
+                description TEXT NOT NULL,
+                status TEXT DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 
@@ -249,3 +263,40 @@ def db_get_message_count(session_id: str) -> int:
         row = cursor.fetchone()
         return row["count"] if row else 0
 
+# For Human-in-the-loop tool
+def db_delete_task(task_id: int) -> str:
+    """Permanently delete a task from SQLite."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tasks WHERE id = ?",(task_id,))
+        conn.commit()
+        if cursor.rowcount == 0:
+            return f"Error: Task with ID {task_id} not found."
+        return f"Task {task_id} permanently deleted."
+
+def db_create_pending_action(action_id: str, session_id: str, tool_name: str, tool_args: dict, tool_call_id: str = "", description: str = ""):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO pending_actions (action_id, session_id, tool_name, tool_args, tool_call_id, description)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,(action_id, session_id, tool_name, json.dumps(tool_args), tool_call_id, description))
+        conn.commit()
+    
+def db_get_pending_action(action_id: str) -> dict:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM pending_actions WHERE action_id = ?
+        """,(action_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def db_update_action_status(action_id: str, status: str):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        UPDATE pending_actions SET status = ? WHERE action_id = ?
+        """, (status, action_id))
+        conn.commit()
+    

@@ -6,12 +6,14 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from groq import Groq
 from embeddings import get_embedding
 from typing import Literal
+from uuid import uuid4
 
 from db import (
     init_db, db_save_note, db_search_notes, db_save_message,
     db_get_messages, db_save_memory, db_get_memories, db_search_memories,
     db_add_task, db_list_tasks, db_complete_task,
-    db_get_session_summary, db_update_session_summary, db_get_message_count
+    db_get_session_summary, db_update_session_summary, db_get_message_count,
+    db_delete_task, db_create_pending_action, db_get_pending_action, db_update_action_status
 )
 
 # Load .env file
@@ -67,6 +69,10 @@ def complete_task(task_id: int):
     """Mark a specific task ID as done."""
     return db_complete_task(task_id)
 
+def delete_task(task_id: int):
+    """Permanently delte a task by ID."""
+    return db_delete_task(task_id)
+
 def compact_session_history(session_id: str):
     """Summarizes older conversation turns if message count exceeds threshold."""
     count = db_get_message_count(session_id)
@@ -114,7 +120,11 @@ available_tools = {
     "add_task": add_task,
     "list_tasks": list_tasks,
     "complete_task": complete_task,
+    "delete_task": delete_task,
 }
+
+# High-Risk Tools that require human approval:
+HIGH_RISK_TOOLS = {"delete_task"}
 
 tools_schema = [
     {
@@ -237,6 +247,23 @@ tools_schema = [
                 "required": ["task_id"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_task",
+            "description": "Permanently delete a task from the database by it ID. CAUTION: This is an irreversible destructive action.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "The ID of the task to permanently delete."
+                    }
+                },
+                "required": ["task_id"]
+            }
+        }
     }
 ]
 
@@ -294,6 +321,15 @@ class ReflectionResponse(BaseModel):
     final_output: str
     refined: bool
 
+# For Human-in-the-loop
+class ApprovalRequest(BaseModel):
+    action_id: str
+    decision: str   # "approved" or "rejected"
+
+class ApprovalResponse(BaseModel):
+    action_id: str
+    status: str
+    result: str
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, background_tasks: BackgroundTasks):
@@ -357,6 +393,30 @@ def chat(req: ChatRequest, background_tasks: BackgroundTasks):
             except json.JSONDecodeError:
                 tool_result = f"Error: Invalid JSON arguments provided for tool '{tool_name}'."
             else:
+                # HITL CHECK: Intercept high-risk tools before execution
+                if tool_name in HIGH_RISK_TOOLS:
+                    action_id = str(uuid4())
+                    db_create_pending_action(action_id, req.session_id, tool_name, tool_args, tool_call_id=tool_call.id)
+
+                    # Persist the tool message stating execution is held for approval
+                    tool_turn = {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_name,
+                        "content": f"[PAUSED] Tool '{tool_name}' is high-risk and pending human approval (action_id: {action_id})."
+                    }
+                    db_save_message(req.session_id, tool_turn)
+
+                    # Return immediately to the user with the action_id
+                    return ChatResponse(
+                        response=(
+                            f"⚠️ **Approval Required**: The model requested to run high-risk tool `{tool_name}`.\n\n"
+                            f"- **Action ID**: `{action_id}`\n"
+                            f"- **Parameters**: `{json.dumps(tool_args)}`\n\n"
+                            f"To execute or reject, send a request to `POST /approve` with this `action_id`."
+                        )
+                    )
+
                 # 6b. Defensively execute tool
                 if tool_name in available_tools:
                     tool_func = available_tools[tool_name]
@@ -523,6 +583,49 @@ def reflect_and_generate(req: ReflectionRequest):
         critique=critique,
         final_output=final_output,
         refined=refined
+    )
+
+@app.post("/approve", response_model=ApprovalResponse)
+def handle_approval(req: ApprovalRequest):
+    """Approve or reject a pending high-risk tool execution."""
+    action = db_get_pending_action(req.action_id)
+    if not action:
+        raise HTTPException(status_code=404, detail="Action ID not found.")
+    
+    if action["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Action is already {action['status']}.")
+
+    if req.decision == "approved":
+        tool_name = action["tool_name"]
+        tool_args = json.loads(action["tool_args"]) if action["tool_args"] else {}
+        # Execute the tool
+        if tool_name in available_tools:
+            try:
+                exec_result = available_tools[tool_name](**tool_args)
+                status = "approved"
+            except Exception as e:
+                exec_result = f"Error executing approved tool: {e}"
+                status = "failed"
+        else:
+            exec_result = f"Error: Tool '{tool_name}' no longer available."
+            status = "failed"
+    else:
+        exec_result = "Action rejected by human operator."
+        status = "rejected"
+    
+    # Update action in DB
+    db_update_action_status(req.action_id, status)
+
+    # Save resolution note in conversation history
+    db_save_message(action["session_id"],{
+        "role": "user",
+        "content": f"[HUMAN {status.upper()}]: Action {req.action_id} was {status}. Result: {exec_result}"
+    })
+
+    return ApprovalResponse(
+        action_id=req.action_id,
+        status=status,
+        result=str(exec_result)
     )
 
 @app.get("/notes", response_model=list[str])
