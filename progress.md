@@ -47,11 +47,12 @@ Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Productio
 
 
 
-### Phase 3: Multi-Agent Systems & Orchestration (UPCOMING ⏳)
+### Phase 3: Multi-Agent Systems & Orchestration (IN PROGRESS 🟡)
 *Building networks of specialized agents that collaborate on complex tasks.*
-- [ ] **Orchestrator–Worker Pattern**: A supervisor agent delegates sub-tasks to dedicated specialist agents (e.g. Research Agent, Coder Agent, Reviewer Agent).
+- [x] **Orchestrator–Worker Pattern**: A supervisor agent delegates sub-tasks to dedicated specialist agents (e.g. Research Worker, Task Worker).
+- [x] **Subagent Isolated Contexts**: Spawning focused subagents with restricted tools (`search_notes`, `add_task`) and summarized report handoffs to prevent context clutter.
 - [ ] **Agent Handoffs & State Graphs**: Routing conversation control between agents using state machines (similar to LangGraph / Swarm architectures).
-- [ ] **Subagent Isolated Contexts**: Spawning focused subagents with restricted tools and summarized report handoffs to prevent context clutter.
+
 
 ---
 

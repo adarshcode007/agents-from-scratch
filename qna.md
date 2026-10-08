@@ -105,6 +105,77 @@
 
 ---
 
+### Q20: Why use a Multi-Agent architecture instead of a single monolithic agent with all tools?
+**A:** 
+1. **Isolated Context Windows (No Context Contamination)**: A monolithic agent accumulates all conversational chatter, raw API payloads, and intermediate tool responses in one massive context window, leading to high token costs, latency, and "Lost in the Middle" errors. Subagents operate in clean, isolated contexts and only pass concise summary reports back to the supervisor.
+2. **Tool Selection Precision (Reduced Tool Hallucination)**: Presenting an LLM with 20+ tools degrades tool-calling accuracy. Specialized subagents only receive the 2–3 tools relevant to their specific domain, drastically reducing incorrect tool selection and argument errors.
+3. **Fault Tolerance & Modular Retries**: If a single subagent encounters an error or fails validation, the supervisor can retry just that specific sub-task without restarting or rolling back the entire multi-step workflow.
+4. **Specialized Prompts & Personas**: Different tasks demand different personas, system constraints, and temperature settings (e.g., a creative copywriter vs. a strict code linter). Multi-agent architectures allow tailoring each agent's system prompt and output schemas to its exact responsibility.
+
+---
+
+### Q21: What are the trade-offs between Centralized Orchestrator–Worker vs. Peer-to-Peer Handoff (Swarm)?
+**A:** 
+- **Centralized Orchestrator–Worker (Hierarchical)**:
+  - *How it works*: A supervisor agent acts as the single point of contact. It decomposes tasks, invokes specialized subagents as callable tools/functions, collects their outputs, and synthesizes the final response.
+  - *Advantages*: Strong global state oversight, easy to enforce deterministic stopping rules, guarantees structured synthesis before returning to user.
+  - *Disadvantages*: Orchestrator can become a bottleneck and adds extra LLM hops to coordinate every subagent call.
+- **Peer-to-Peer / Handoff (Decentralized / Swarm)**:
+  - *How it works*: Control is passed directly between agents (e.g., Front Desk Agent $\rightarrow$ Billing Agent $\rightarrow$ Technical Agent) via handoff functions that switch the active system prompt and toolset.
+  - *Advantages*: Zero coordinator overhead; the user communicates directly with the active domain specialist without middleman synthesis calls.
+  - *Disadvantages & Risks*:
+    1. **Infinite Ping-Pong Loops**: Agent A can hand off to Agent B, which hands back to Agent A without making progress.
+    2. **Loss of Global State**: Without a supervisor, global context can drift or get diluted over multiple hops.
+    3. **Difficult Global Guardrails**: Harder to enforce global exit conditions or holistic quality critiques.
+
+### Q22: Why isolate tool schemas and context between the Supervisor and Subagents?
+**A:** 
+- **Tool Scoping (Principle of Least Privilege)**: The Supervisor only needs tools to *delegate* tasks (e.g., `delegate_to_researcher`, `delegate_to_planner`), while Subagents only receive tools directly relevant to their domain (e.g., `search_notes`, `add_task`). Hiding underlying implementation tools from the Supervisor prevents tool-calling ambiguity.
+- **Context Cleanliness**: Subagent intermediate steps (raw queries, SQL results, formatting retries) stay encapsulated inside the subagent's local loop. Only the final distilled report is returned to the Supervisor, keeping the Supervisor's context concise, fast, and token-efficient.
+
+### Q23: Why track structured Subagent Reports (Telemetry) in multi-agent systems?
+**A:** 
+1. **Observability & Traceability**: Multi-agent systems involve asynchronous and multi-hop LLM calls. If a final answer is wrong or hallucinated, the structured reports allow developers to inspect exactly which subagent generated the faulty data.
+2. **Deterministic Quality Auditing**: Exposing individual inputs, outputs, and iteration counts allows automated unit tests and supervisors to verify whether a subagent fulfilled its specific acceptance criteria without relying solely on the final consolidated text.
+3. **Latency & Cost Profiling**: Tracking iteration counts per subagent reveals which worker is burning excess tokens or hitting infinite tool loops.
+
+### Q24: Why must each subagent execution instantiate a fresh, ephemeral context window?
+**A:** 
+- **Preventing Context Contamination & Race Conditions**: If subagents shared a global `messages` list, concurrent or sequential calls would mutate the same history, causing cross-task hallucinations and memory leakage between distinct sub-tasks.
+- **Garbage Collection of Scratchpads**: Subagent reasoning and intermediate tool payloads (e.g. big JSON blobs, SQL queries) are only needed to produce the final report. An ephemeral list (`sub_messages`) naturally goes out of scope after the worker returns, reclaiming memory and keeping token usage strictly bounded.
+
+### Q25: Why scope tools strictly to domain specialists instead of giving every worker all tools?
+**A:** 
+1. **Minimizing Decision Complexity**: When an LLM has 10+ tools, the probability of selecting the wrong tool or hallucinating parameters increases non-linearly. Restricting a worker to 2–3 tools makes tool selection nearly 100% deterministic.
+2. **Context & Execution Isolation**: Segregating tools keeps intermediate tool execution outputs inside their respective domains. A task scheduler never sees raw search dumps, and a researcher never accidentally mutates the database.
+3. **Granular Telemetry & Debugging**: If an issue occurs, developers and supervisors know immediately whether the breakdown happened during information gathering (ResearchWorker) or database mutation (TaskWorker).
+
+### Q26: How does Control Flow differ between Orchestrator–Worker vs. Agent Handoff (Swarm)?
+**A:** 
+- **Orchestrator–Worker (Centralized Root Control)**: Control flow operates like a function call tree. The Supervisor receives the user prompt, invokes subagents as worker subroutines, captures their reports, and always retains final authority to synthesize the response returned to the user.
+- **Agent Handoff / Swarm (Decentralized State Transfer)**: Control flow operates like a finite state machine or relay race. An agent actively transfers the entire active conversation context and execution control to another specialist (e.g. `TriageAgent` $\rightarrow$ `BillingAgent`), who now speaks directly to the user without routing back to a supervisor.
+
+---
+
+### Q27: When should Subagents be executed sequentially vs. in parallel, and how does `iterations_used` guide system optimization?
+**A:** 
+1. **Sequential Execution (Data Dependencies)**: When downstream workers require outputs from upstream workers (e.g. `TaskWorker` needs facts discovered by `ResearchWorker`), the Supervisor must execute them sequentially, passing previous findings into the next worker's prompt.
+2. **Parallel Execution (Independent Sub-tasks)**: When sub-tasks are independent (e.g., scraping 3 unrelated websites simultaneously), subagents can be run concurrently (via `asyncio.gather`), slashing latency.
+3. **Using `iterations_used` for Optimization**: If telemetry shows a worker consistently hitting high iteration counts (e.g., 5/5):
+   - The worker's system prompt or tool descriptions may be ambiguous, leading to retry loops.
+   - The worker's scope is too broad and should be split into smaller, dedicated subagents.
+   - Low iteration counts (1–2) confirm high tool-calling precision and low token overhead.
+
+---
+
+
+
+
+
+
+
+
+
 
 
 

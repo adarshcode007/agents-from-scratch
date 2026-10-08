@@ -111,6 +111,220 @@ def compact_session_history(session_id: str):
         # Save updated summary into SQLite
         db_update_session_summary(session_id, new_summary)
 
+def run_subagent_loop(
+    agent_name: str, system_prompt: str,user_prompt: str,
+    tools_schema: list[dict], tools_map: dict, max_iterations: int = 5
+    ) -> tuple[str, int]:
+    """Runs an isolated ReAct loop for any specialized worker subagent."""
+    # 1. Fresh, isolated context window
+    sub_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+
+    iteration = 0
+    while iteration < max_iterations:
+        # 2. Call LLM with worker's scoped tools
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=sub_messages,
+            tools=tools_schema if tools_schema else None
+        )
+        resp_msg = completion.choices[0].message
+        sub_messages.append(resp_msg)
+
+        # 3. If no tools are called, the subagent is finished
+        if not resp_msg.tool_calls:
+            return resp_msg.content or "Task completed with no text output.", iteration + 1
+        
+        # 4. Defensively execute the worker's tools
+        for tool_call in resp_msg.tool_calls:
+            t_name = tool_call.function.name
+            try:
+                t_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+            except json.JSONDecodeError:
+                t_res = f"Error: Invalid JSON arguments for tool '{t_name}'"
+            else:
+                if t_name in tools_map:
+                    try:
+                        t_res = tools_map[t_name](**t_args)
+                    except Exception as e:
+                        t_res = f"Error executing tool '{t_name}': {e}"
+                else:
+                    t_res = f"Error: Tool '{t_name}' is not in this worker's toolset."
+            
+            # 5. Append tool result to the worker's private scratchpad
+            sub_messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": t_name,
+                "content": str(t_res)
+            })
+        iteration += 1
+    return f"Worker '{agent_name}' reached max iterations ({max_iterations}) without concluding.", max_iterations
+
+def search_memory_facts(query: str) -> str:
+    """Search semantic memory facts via embeddings."""
+    q_vec = get_embedding(query)
+    facts = db_search_memories(q_vec, top_k=3, threshold=0.25)
+    if facts:
+        return "Found memories:\n" + "\n".join(f"- {f}" for f in facts)
+    return "No matching memory facts found."
+
+research_worker_tools_schema = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_notes",
+            "description": "Search user notes by keyword.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Keyword to search"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_memory_facts",
+            "description": "Search user facts & preferences using semantic vector search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Topic or concept to search"}
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
+
+research_worker_tools = {
+    "search_notes": search_notes,
+    "search_memory_facts": search_memory_facts
+}
+
+def research_worker(task: str) -> tuple[str,int]:
+    """Specialized worker for gathering facts, notes, and user memories."""
+    system_prompt = """
+        You are a specialized Research worker. Your sole job is to search notes and stored memory facts
+        to answer queries thoroughly and factually.
+        Synthesize your findings into a clear, concise bullet-point research briefing.
+    """
+    return run_subagent_loop(
+        agent_name="ResearchWorker",
+        system_prompt=system_prompt,
+        user_prompt=task,
+        tools_schema=research_worker_tools_schema,
+        tools_map=research_worker_tools
+    )
+
+task_worker_tools_schema = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "Get current time for calculating relative dates (eg. tomorrow).",
+            "parameters":{
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_task",
+            "description": "Add a new task with title, due_date (YYYY-MM-DD), and description.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Task title"
+                    },
+                    "due_date": {"type": "string", "description": "Due date in YYYY-MM-DD format"},
+                    "description": {"type": "string", "description": "Details or priority"},
+                },
+                "required": ["title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tasks",
+            "description": "List existing tasks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "description": "'pending' or 'done'"}
+                },
+                "required": ["status"]
+            }
+        }
+    }
+]
+
+task_worker_tools = {
+    "get_current_time": get_current_time,
+    "add_task": add_task,
+    "list_tasks": list_tasks
+}
+
+def task_worker(instructions: str) -> tuple[str, int]:
+    """Specialized worker for scheduling and managing user tasks."""
+    system_prompt = """
+        You are a specialized Task Management Worker.
+        You job is to create, check and organize tasks based on the given instrucutions.
+        Calculate dates accurately using get_current_time when needed.
+        Return a structured summary of all task actions performed.
+    """
+    return run_subagent_loop(
+        agent_name="TaskWorker",
+        system_prompt=system_prompt,
+        user_prompt=instructions,
+        tools_schema=task_worker_tools_schema,
+        tools_map=task_worker_tools
+    )
+
+# Supervisor's Delegation Tools Schema
+supervisor_tools_schema = [
+    {
+        "type": "function",
+        "function": {
+            "name": "delegate_to_researcher",
+            "description": "Delegate information gathering, fact retrieval, or note searching to the Research Specialist Worker.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Specific research topic or query to investigate"},
+                },
+                "required": ["task"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delegate_to_task_manager",
+            "description": "Delegate creating, listing or scheduling actionable task to the Task Management Specialist Worker.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instructions": {
+                        "type": "string", "description": "Explicit instructions for what tasks to create or manage"},
+                },
+                "required": ["instructions"]
+            }
+        }
+    }
+]
+
 # 2. A Dictonary that maps tool names to the actual functions
 available_tools = {
     "get_current_time": get_current_time,
@@ -330,6 +544,25 @@ class ApprovalResponse(BaseModel):
     action_id: str
     status: str
     result: str
+
+# ======================================================
+# PHASE 3: MULTI-AGENT SYSTEMS & ORCHESTRATION
+# ======================================================
+
+class SubagentReport(BaseModel):
+    agent_name: str
+    task_input: str
+    report_output: str
+    iterations_used: int
+
+class OrchestratorRequest(BaseModel):
+    goal: str
+
+class OrchestratorResponse(BaseModel):
+    goal: str
+    subagent_reports: list[SubagentReport]
+    final_synthesis: str
+
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, background_tasks: BackgroundTasks):
@@ -627,6 +860,101 @@ def handle_approval(req: ApprovalRequest):
         status=status,
         result=str(exec_result)
     )
+
+# 2. Supervisor Orchestration Endpoint
+@app.post("/multi-agent/orchestrate", response_model=OrchestratorResponse)
+def orchestrate_workflow(req: OrchestratorRequest):
+    """
+    Orchestrator-Worker Multi-Agent Pattern:
+    1. Supervisor decomposes high-level goal.
+    2. Supervisor calls specialised subagents as tools (isolated ReAct contexts).
+    3. Supervisor collects worker reports and synthesizes the unified final response.
+    """
+    reports: list[SubagentReport] = []
+
+    def handle_delegate_research(task: str) -> str:
+        report_text, iters = research_worker(task)
+        reports.append(SubagentReport(
+            agent_name="ResearchWorker",
+            task_input=task,
+            report_output=report_text,
+            iterations_used=iters
+        ))
+        return report_text
+    
+    def handle_delegate_task_manager(instructions: str) -> str:
+        report_text, iters = task_worker(instructions)
+        reports.append(SubagentReport(
+            agent_name="TaskWorker",
+            task_input=instructions,
+            report_output=report_text,
+            iterations_used=iters
+        ))
+        return report_text
+    
+    supervisor_tools_map = {
+        "delegate_to_researcher": handle_delegate_research,
+        "delegate_to_task_manager": handle_delegate_task_manager
+    }
+
+    supervisor_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are the Lead Orchestrator and Supervisor Agent.\n"
+                "Your role is to accomplish complex, multi-domain user goals by coordinating your specialized team:\n"
+                "1. ResearchWorker: Gathers context, finds notes, and searches user memories.\n"
+                "2. TaskWorker: Creates and manages actionable tasks in the database.\n\n"
+                "Strategy:\n"
+                "- Decompose the user request.\n"
+                "- Delegate each domain to its specialist worker.\n"
+                "- When workers return their reports, synthesize everything into a clear, professional executive briefing."
+            )
+        },
+        {"role": "user", "content": req.goal}
+    ]
+
+    max_supervisor_iterations = 6
+    iteration = 0
+
+    while iteration < max_supervisor_iterations:
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=supervisor_messages,
+            tools=supervisor_tools_schema
+        )
+        resp_msg = completion.choices[0].message
+        supervisor_messages.append(resp_msg)
+
+        # When supervisor has finished delegating and ouputs final text response
+        if not resp_msg.tool_calls:
+            return OrchestratorResponse(
+                goal=req.goal,
+                subagent_reports=reports,
+                final_synthesis=resp_msg.content or "Execution completed."
+            )
+        
+        # Supervisor executes delegating tool calls
+        for tool_call in resp_msg.tool_calls:
+            tool_name = tool_call.function.name
+            try:
+                tool_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+            except json.JSONDecodeError:
+                worker_result = f"Error: Invalid arguments for {tool_name}"
+            else:
+                if tool_name in supervisor_tools_map:
+                    worker_result = supervisor_tools_map[tool_name](**tool_args)
+                else:
+                    worker_result = f"Error: Unknown worker {tool_name}"
+            
+            supervisor_messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": tool_name,
+                "content": str(worker_result)
+            })
+        iteration += 1
+    raise HTTPException(status_code=500, detail="Supervisor exceeded maximum orchestration iterations")
 
 @app.get("/notes", response_model=list[str])
 def get_all_notes():
