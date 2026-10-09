@@ -1,3 +1,4 @@
+from typing import final
 import json
 from datetime import datetime
 from dotenv import load_dotenv
@@ -563,6 +564,246 @@ class OrchestratorResponse(BaseModel):
     subagent_reports: list[SubagentReport]
     final_synthesis: str
 
+# SWARM / AGENT HANDOFF PATTERN
+class Agent:
+    def __init__(self, name: str, system_prompt: str, tools_schema: list[dict] = None, tools_map: dict = None):
+        self.name = name
+        self.system_prompt = system_prompt
+        self.tools_schema = tools_schema or []
+        self.tools_map = tools_map or {}
+
+class SwarmHandoffStep(BaseModel):
+    from_agent: str
+    to_agent: str
+    reason: str
+
+class SwarmResponse(BaseModel):
+    final_agent: str
+    handoff_history: list[SwarmHandoffStep]
+    final_response: str
+
+# Forward References / instances
+triage_agent = None
+support_agent = None
+sales_agent = None
+
+# Handoff tool functions that return the target Agent object
+def transfer_to_support():
+    """Transfer the user ot the Techinal Support specialist for debugging or searching notes."""
+    return support_agent
+
+def transfer_to_sales():
+    """Transfer the user to the Sales & Scheduling specialist for booking appointments or adding tasks."""
+    return sales_agent
+
+def transfer_to_triage():
+    """Transfer back to the front-desk Triage agent if the inquiry is outside your domain."""
+    return triage_agent
+
+# Instantiate the Specialists
+support_agent = Agent(
+    name="SupportAgent",
+    system_prompt="You are the Technical Support Agent.\n"
+        "1. First, call 'search_notes' to check for technical notes and downtime logs.\n"
+        "2. If the user ALSO asked to schedule a meeting, appointment, or contact sales after reviewing the technical inquiry, you MUST call 'transfer_to_sales'.",
+    tools_schema=[
+        {
+            "type": "function",
+            "function": {
+                "name": "search_notes",
+                "description": "Search notes for techinal knowledge.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "transfer_to_sales",
+                "description": "Hand off the user to the Sales & Scheduling Agent.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        }
+    ],
+    tools_map= {
+        "search_notes": search_notes,
+        "transfer_to_sales": transfer_to_sales
+    }
+)
+
+sales_agent = Agent(
+    name="SalesAgent",
+    system_prompt="You are the Sales & Scheduling Agent.\n"
+        "When the user requests an appointment or meeting, you MUST call 'get_current_time' to find the date, "
+        "and then call 'add_task' with the calculated due_date and title. "
+        "Do not tell the user you forwarded or will schedule it without calling 'add_task' first.",
+    tools_schema=[
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_time",
+                "description": "Get current time for calculating relative dates like tomorrow or next monday.",
+                "parameters": {"type": "object", "properties": {}, "required": []}
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_task",
+                "description": "Add a new appointment or follow-up task.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "due_date": {"type": "string"},
+                        "description": {"type": "string"}
+                    },
+                    "required": ["title"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "transfer_to_support",
+                "description": "Hand off the user to the Techinal SUpport Agent.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        }
+    ],
+    tools_map={
+        "get_current_time": get_current_time,
+        "add_task": add_task,
+        "transfer_to_support": transfer_to_support
+    }
+)
+
+triage_agent = Agent(
+    name="TriageAgent",
+    system_prompt="You are the Front Desk Triage Agent.\n"
+        "ROUTING RULES:\n"
+        "1. If the user mentions ANY technical question, server issue, or note search, you MUST call 'transfer_to_support' first (even if they also mention scheduling/sales later).\n"
+        "2. ONLY call 'transfer_to_sales' directly if the user's ONLY request is sales or booking without any technical questions.",
+    tools_schema=[
+        {
+            "type": "function",
+            "function": {
+                "name": "transfer_to_support",
+                "description": "Transfer to Support for techinal questions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "transfer_to_sales",
+                "description": "Transfer to Sales for task scheduling and bookings.",
+                "parameters": {"type": "object", "properties": {}, "required": []}
+            }
+        }
+    ],
+    tools_map={
+        "transfer_to_support": transfer_to_support,
+        "transfer_to_sales": transfer_to_sales
+    }
+)
+
+def run_swarm_loop(starting_agent: Agent, user_message: str, max_turns: int = 10) -> SwarmResponse:
+    """
+    Executes a Warm multi-agent state machine.
+    Dynamically transfers control between agents when a handoff tool is triggered.
+    """
+    current_agent = starting_agent
+    handoff_history: list[SwarmHandoffStep] = []
+
+    # Initialize messages with starting agent's system prompt and the user's prompt
+    messages = [
+        {"role": "system", "content": current_agent.system_prompt},
+        {"role": "user", "content": user_message}
+    ]
+
+    turn = 0
+    while turn < max_turns:
+        # Call LLM with the Active agents's scoped tools
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=messages,
+            tools=current_agent.tools_schema if current_agent.tools_schema else None
+        )
+        resp_msg = completion.choices[0].message
+        messages.append(resp_msg)
+
+        # If no tools are called, the active agent gavt the final answer directly to the user
+        if not resp_msg.tool_calls:
+            return SwarmResponse(
+                final_agent=current_agent.name,
+                handoff_history=handoff_history,
+                final_response=resp_msg.content or "No response generated."
+            )
+        
+        # Execute tool calls and check for Agent handoffs
+        for tool_call in resp_msg.tool_calls:
+            t_name = tool_call.function.name
+            try:
+                t_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+            except json.JSONDecodeError:
+                tool_res = f"Error: Invalid JSON for tool {t_name}"
+            else:
+                if t_name in current_agent.tools_map:
+                    try:
+                        tool_res = current_agent.tools_map[t_name](**t_args)
+                    except Exception as e:
+                        tool_res = f"Error executing {t_name}: {e}"
+                else:
+                    tool_res = f"Error: Tool {t_name} not found on agent {current_agent.name}"
+            
+            # HANDOFF DETECTION: Did the tool return another Agent?
+            if isinstance(tool_res, Agent):
+                new_agent = tool_res
+                handoff_history.append(SwarmHandoffStep(
+                    from_agent=current_agent.name,
+                    to_agent=new_agent.name,
+                    reason=f"Transferred via tool '{t_name}'"
+                ))
+                # STATE TRANSITION: Swap active agent and update system prompt
+                current_agent = new_agent
+                messages[0] = {"role": "system", "content": current_agent.system_prompt}
+
+                # Record handoff event in tool message
+                # tool_msg_content = f"Successfully transferred conversation to {new_agent.name}"
+                tool_msg_content = f"Transferred to {new_agent.name}. You are now in control. Execute your tools to fulfill the user's request: '{user_message}'"
+            else:
+                tool_msg_content = str(tool_res)
+            
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": t_name,
+                "content": tool_msg_content
+            })
+        turn += 1
+    
+    return SwarmResponse(
+        final_agent=current_agent.name,
+        handoff_history=handoff_history,
+        final_response="Swarm exceeded maximum turns."
+    )
+
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, background_tasks: BackgroundTasks):
@@ -861,7 +1102,7 @@ def handle_approval(req: ApprovalRequest):
         result=str(exec_result)
     )
 
-# 2. Supervisor Orchestration Endpoint
+# Supervisor Orchestration Endpoint
 @app.post("/multi-agent/orchestrate", response_model=OrchestratorResponse)
 def orchestrate_workflow(req: OrchestratorRequest):
     """
@@ -955,6 +1196,19 @@ def orchestrate_workflow(req: OrchestratorRequest):
             })
         iteration += 1
     raise HTTPException(status_code=500, detail="Supervisor exceeded maximum orchestration iterations")
+
+# SWARM
+class SwarmRequest(BaseModel):
+    message: str
+
+@app.post("/multi-agent/swarm", response_model=SwarmResponse)
+def handle_warm_chat(req: SwarmRequest):
+    """
+    Agent Handoff / Swarm Endpoint:
+    Starts at TriageAgent and dynamically transfers control based on user intent.
+    """
+    return run_swarm_loop(starting_agent=triage_agent, user_message=req.message)
+
 
 @app.get("/notes", response_model=list[str])
 def get_all_notes():

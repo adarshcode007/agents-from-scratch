@@ -146,3 +146,35 @@ sample output:
     "final_synthesis": "**Executive Briefing – Findings & Next Steps**\n\n| Area | Findings | Action Taken |\n|------|----------|--------------|\n| **Python Study Goals** | No specific notes or memories were found in your records. The only related memory fact is that you prefer TypeScript over Python for web projects, with no defined learning objectives. | A follow‑up task has been created to clarify and document your Python study goals. |\n| **Server Downtime** | No notes or memories regarding server downtime incidents were retrieved. The only associated memory fact is a general interest in table tennis, unrelated to server operations. | The same follow‑up task will include pulling server logs and checking for any recent downtime incidents. |\n\n---\n\n### Actionable Task Created\n\n**Task ID:** *(system generated)*  \n**Title:** **Python & Server Review**  \n**Due Date:** **2026‑10‑09 (Tomorrow)**  \n**Deadline:** **10:00 AM**  \n**Description & Steps:**\n\n1. **Meet with the team** to outline and define concrete Python study objectives.  \n2. **Pull server logs** from the last week and review uptime/downtime metrics.  \n3. **Identify any downtime incidents** and document root causes or mitigation steps.  \n\nThe task is now in your task database and will appear in your schedule for tomorrow at the specified time. If you need more detail or have additional context, just let me know!"
 }
 ```
+
+
+
+### POST /multi-agent/swarm
+
+Sample Input:
+```json
+{
+  "message": "I have a technical question about our database server downtime. Check my saved notes to see what was recorded about it, and then hand me off to Sales to schedule a follow-up meeting for tomorrow to review the system."
+}
+
+```
+
+Sample Output:
+```json
+{
+    "final_agent": "SalesAgent",
+    "handoff_history": [
+        {
+            "from_agent": "TriageAgent",
+            "to_agent": "SupportAgent",
+            "reason": "Transferred via tool 'transfer_to_support'"
+        },
+        {
+            "from_agent": "SupportAgent",
+            "to_agent": "SalesAgent",
+            "reason": "Transferred via tool 'transfer_to_sales'"
+        }
+    ],
+    "final_response": "I’ve added a task for a follow-up meeting to review the database server downtime tomorrow (October 10, 2026). I’ll hand you over to Sales to coordinate the details. Have a great day!"
+}
+```
