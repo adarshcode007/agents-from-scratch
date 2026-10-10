@@ -239,26 +239,43 @@
   4. **Strict Handoff Depth Counter**:
      - Maintain an explicit `handoff_count` limit (e.g. max 3 transfers) to terminate or fall back before circular handoffs drain tokens.
 
+### Q34: Why is unstructured text logging insufficient for LLM agents, and how does Step-Level Tracing solve this?
+**A:** 
+1. **Hierarchical Execution (Traces & Spans)**: In multi-agent or multi-turn loops, flat log lines get interleaved and scramble context. Structured Tracing connects every action under a unique `trace_id` with parent/child spans (e.g. Supervisor $\rightarrow$ Worker $\rightarrow$ Tool Call).
+2. **Token & Cost Observability**: Models charge per token. Step-level tracing tracks `prompt_tokens`, `completion_tokens`, and total cost per individual step, allowing developers to detect which prompt or tool is burning budget.
+3. **Latency Profiling**: Capturing `latency_ms` per LLM invocation and tool execution reveals exact system bottlenecks (e.g., whether slow performance is caused by LLM generation or slow database/API queries).
+4. **Structured Payloads for Auditing**: Storing inputs and outputs as JSON enables programmatic filtering, automated replay in evals, and prompt debugging.
+
+### Q35: Why track `prompt_tokens` and `completion_tokens` separately in Telemetry?
+**A:** 
+1. **Asymmetric Pricing (Output is 3x–5x more expensive)**: Across almost all LLM providers, completion (output) tokens are billed at 3x to 5x the rate of prompt (input) tokens. Monitoring them separately prevents cost spikes from overly verbose models.
+2. **Detecting Context Window Bloat**: Tracking `prompt_tokens` over time verifies whether memory management (sliding window, rolling summarization, vector filtering) is actually working or if inputs are leaking and compounding turn-by-turn.
+3. **Prompt Caching Economics**: Modern providers offer 50%–90% discounts on cached prompt tokens. Segregating prompt tokens allows measuring cache hit rates and calculating exact dollar spend.
+
+### Q36: What is an SLA (Service Level Agreement) in Agentic AI, and why does Step-Level Tracing matter for it?
+**A:** 
+- **What is an SLA?**: A formal engineering guarantee defining performance standards (e.g. *"95% of user requests will complete under 3.5 seconds with under $0.02 cost per session"*).
+- **Why Tracing is Mandatory for SLAs**:
+  1. **Latency Attribution**: If a request takes 7 seconds, Tracing reveals whether the bottleneck was LLM generation (e.g. 5.8s on a large prompt) or an external database/tool query (e.g. 1.2s on slow SQL).
+  2. **Cost Ceilings**: Summing `prompt_tokens` and `completion_tokens` across steps guarantees a session hasn't exceeded its cost budget.
+  3. **Error Budget Tracking**: Pinpoints failure rates across specific tools and subagent transitions.
+
+### Q37: In Tracing, why do Tool Executions and Handoff Spans show 0 tokens while LLM Spans carry the token usage?
+**A:** 
+- **Separation of Cognitive vs Execution Spans**:
+  - **`llm_call` Spans (Cognitive)**: When the model decides to call `transfer_to_sales` or `add_task`, it consumes API tokens to read the prompt and generate the JSON tool arguments. All token costs belong exclusively to this LLM invocation (e.g. Step 1 used 230 prompt + 39 completion tokens).
+  - **`tool_execution` & `handoff` Spans (Deterministic Execution)**: These steps represent Python runtime operations executing locally on CPU (e.g., executing `transfer_to_sales()` in 0.0ms or inserting into SQLite in 3.2ms). They consume **zero LLM tokens**.
+- **Observability Benefit**: This decoupling enables exact cost and latency attribution: you see precisely how much money was spent generating the decision (LLM tokens) vs how much time was spent running the actual business logic (Tool latency).
+
+### Q38: Why stream Agent Status Events (Thought/Tool/Handoff updates) alongside Text Tokens in Agentic UX?
+**A:** 
+- **The "Dead Spinner" Problem**: In a multi-agent system, tools and handoffs execute *before* the final response tokens are generated. If you only stream text tokens, the user still stares at an unresponsive loading spinner for 5–10 seconds while tools run.
+- **Perceived Latency & Trust**:
+  1. **Immediate Feedback (Sub-500ms TTFT)**: Yielding `{"type": "status", "message": "TriageAgent analyzing..."}` within 400ms reassures the user that progress is happening.
+  2. **Auditability in the UI**: Showing live badges (e.g. `[Searching notes...]`, `[Scheduling meeting...]`) builds user trust by exposing the agent's reasoning steps in real time.
+  3. **Early Cancellation**: If a user sees an agent heading down the wrong tool path, they can cancel early rather than waiting for a full 10-second failure.
+
 ---
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

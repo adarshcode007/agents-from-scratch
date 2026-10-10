@@ -162,6 +162,7 @@ Sample Input:
 Sample Output:
 ```json
 {
+    "trace_id": "tr_f2862g16",     // added later
     "final_agent": "SalesAgent",
     "handoff_history": [
         {
@@ -177,4 +178,119 @@ Sample Output:
     ],
     "final_response": "I’ve added a task for a follow-up meeting to review the database server downtime tomorrow (October 10, 2026). I’ll hand you over to Sales to coordinate the details. Have a great day!"
 }
+```
+
+
+### GET /traces/{trace_id}
+
+Sample Output:
+```json
+{
+  "trace_id": "tr_f2862f15",
+  "total_steps": 7,
+  "total_prompt_tokens": 1549,
+  "total_completion_tokens": 221,
+  "total_latency_ms": 1891.22,
+  "steps": [
+    {
+      "id": 1,
+      "trace_id": "tr_f2862f15",
+      "session_id": null,
+      "step_type": "llm_call",
+      "name": "TriageAgent (LLM)",
+      "input_data": "{\"message_count\": 2}",
+      "output_data": "{\"text\": null, \"tool_calls_count\": 1}",
+      "prompt_tokens": 230,
+      "completion_tokens": 39,
+      "latency_ms": 421.8933999654837,
+      "status": "success",
+      "created_at": "2026-10-10 11:10:02"
+    },
+    {
+      "id": 2,
+      "trace_id": "tr_f2862f15",
+      "session_id": null,
+      "step_type": "handoff",
+      "name": "Handoff: TriageAgent -> SalesAgent",
+      "input_data": "{\"from\": \"TriageAgent\", \"to\": \"SalesAgent\"}",
+      "output_data": null,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "latency_ms": 0.0,
+      "status": "success",
+      "created_at": "2026-10-10 11:10:02"
+    },
+    {
+      "id": 3,
+      "trace_id": "tr_f2862f15",
+      "session_id": null,
+      "step_type": "llm_call",
+      "name": "SalesAgent (LLM)",
+      "input_data": "{\"message_count\": 4}",
+      "output_data": "{\"text\": null, \"tool_calls_count\": 1}",
+      "prompt_tokens": 340,
+      "completion_tokens": 98,
+      "latency_ms": 548.2515000039712,
+      "status": "success",
+      "created_at": "2026-10-10 11:10:02"
+    },
+    {
+      "id": 4,
+      "trace_id": "tr_f2862f15",
+      "session_id": null,
+      "step_type": "tool_execution",
+      "name": "get_current_time",
+      "input_data": "{}",
+      "output_data": "2026-10-10 16:40:02",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "latency_ms": 0.04020001506432891,
+      "status": "success",
+      "created_at": "2026-10-10 11:10:02"
+    },
+    {
+      "id": 5,
+      "trace_id": "tr_f2862f15",
+      "session_id": null,
+      "step_type": "llm_call",
+      "name": "SalesAgent (LLM)",
+      "input_data": "{\"message_count\": 6}",
+      "output_data": "{\"text\": null, \"tool_calls_count\": 1}",
+      "prompt_tokens": 457,
+      "completion_tokens": 50,
+      "latency_ms": 273.2374999905005,
+      "status": "success",
+      "created_at": "2026-10-10 11:10:02"
+    },
+    {
+      "id": 6,
+      "trace_id": "tr_f2862f15",
+      "session_id": null,
+      "step_type": "tool_execution",
+      "name": "add_task",
+      "input_data": "{\"description\": \"Appointment at dentist office\", \"due_date\": \"2026-10-16T15:00:00\", \"title\": \"Dentist Appointment\"}",
+      "output_data": "Task added: Dentist Appointment",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "latency_ms": 3.2632999937050045,
+      "status": "success",
+      "created_at": "2026-10-10 11:10:02"
+    },
+    {
+      "id": 7,
+      "trace_id": "tr_f2862f15",
+      "session_id": null,
+      "step_type": "llm_call",
+      "name": "SalesAgent (LLM)",
+      "input_data": "{\"message_count\": 8}",
+      "output_data": "{\"text\": \"Your dentist appointment has been scheduled for next Tuesday, October\\u202f16th at 3\\u202fp.m. Let me know if you need anything else!\", \"tool_calls_count\": 0}",
+      "prompt_tokens": 522,
+      "completion_tokens": 34,
+      "latency_ms": 644.5295999874361,
+      "status": "success",
+      "created_at": "2026-10-10 11:10:03"
+    }
+  ]
+}
+
 ```

@@ -87,6 +87,24 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Table 7: Traces & Spans (Telemetry & Observability)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trace_id TEXT NOT NULL,
+                session_id TEXT,
+                step_type TEXT NOT NULL,  -- 'llm_call', 'tool_execution', 'handoff'
+                name TEXT NOT NULL,   -- agent name, tool name, or model name
+                input_data TEXT,
+                output_data TEXT,
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                latency_ms REAL NOT NULL,
+                status TEXT DEFAULT 'success',  -- 'success', 'error'
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 
@@ -300,3 +318,47 @@ def db_update_action_status(action_id: str, status: str):
         """, (status, action_id))
         conn.commit()
     
+def db_log_trace(
+    trace_id: str,
+    step_type: str,
+    name: str,
+    latency_ms: float,
+    session_id: str = None,
+    input_data: dict | str = None,
+    output_data: dict | str = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    status: str = "success"
+):
+    """Logs a single execution span into SQlite traces."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO traces (
+                trace_id, session_id, step_type, name, input_data, output_data,
+                prompt_tokens, completion_tokens, latency_ms, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,(
+            trace_id,
+            session_id,
+            step_type,
+            name,
+            json.dumps(input_data) if isinstance(input_data, dict) else str(input_data) if input_data else None,
+            json.dumps(output_data) if isinstance(output_data, dict) else str(output_data) if output_data else None,
+            prompt_tokens,
+            completion_tokens,
+            latency_ms,
+            status
+        ))
+        conn.commit()
+
+def db_get_trace(trace_id: str) -> list[dict]:
+    """Retrieves all chronological steps recorded for a trace_id."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM traces WHERE trace_id = ? ORDER BY id ASC
+        """,(trace_id,))
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+

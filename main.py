@@ -8,13 +8,15 @@ from groq import Groq
 from embeddings import get_embedding
 from typing import Literal
 from uuid import uuid4
+import time
 
 from db import (
     init_db, db_save_note, db_search_notes, db_save_message,
     db_get_messages, db_save_memory, db_get_memories, db_search_memories,
     db_add_task, db_list_tasks, db_complete_task,
     db_get_session_summary, db_update_session_summary, db_get_message_count,
-    db_delete_task, db_create_pending_action, db_get_pending_action, db_update_action_status
+    db_delete_task, db_create_pending_action, db_get_pending_action, db_update_action_status,
+    db_log_trace, db_get_trace
 )
 
 # Load .env file
@@ -578,6 +580,7 @@ class SwarmHandoffStep(BaseModel):
     reason: str
 
 class SwarmResponse(BaseModel):
+    trace_id: str
     final_agent: str
     handoff_history: list[SwarmHandoffStep]
     final_response: str
@@ -725,9 +728,10 @@ triage_agent = Agent(
 
 def run_swarm_loop(starting_agent: Agent, user_message: str, max_turns: int = 10) -> SwarmResponse:
     """
-    Executes a Warm multi-agent state machine.
+    Executes a Swarm multi-agent state machine with step-level telemetry tracing.
     Dynamically transfers control between agents when a handoff tool is triggered.
     """
+    trace_id = f"tr_{uuid4().hex[:8]}"
     current_agent = starting_agent
     handoff_history: list[SwarmHandoffStep] = []
 
@@ -740,17 +744,36 @@ def run_swarm_loop(starting_agent: Agent, user_message: str, max_turns: int = 10
     turn = 0
     while turn < max_turns:
         # Call LLM with the Active agents's scoped tools
+        t_start = time.perf_counter()
         completion = client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=messages,
             tools=current_agent.tools_schema if current_agent.tools_schema else None
         )
+        llm_latency_ms = (time.perf_counter() - t_start) * 1000
+
+        #Log LLM Span
+        p_tokens = completion.usage.prompt_tokens if completion.usage else 0
+        c_tokens = completion.usage.completion_tokens if completion.usage else 0
+
         resp_msg = completion.choices[0].message
         messages.append(resp_msg)
+
+        db_log_trace(
+            trace_id=trace_id,
+            step_type="llm_call",
+            name=f"{current_agent.name} (LLM)",
+            latency_ms=llm_latency_ms,
+            input_data={"message_count": len(messages) - 1},
+            output_data={"text": resp_msg.content, "tool_calls_count": len(resp_msg.tool_calls or [])},
+            prompt_tokens=p_tokens,
+            completion_tokens=c_tokens,
+        )
 
         # If no tools are called, the active agent gavt the final answer directly to the user
         if not resp_msg.tool_calls:
             return SwarmResponse(
+                trace_id=trace_id,
                 final_agent=current_agent.name,
                 handoff_history=handoff_history,
                 final_response=resp_msg.content or "No response generated."
@@ -765,12 +788,18 @@ def run_swarm_loop(starting_agent: Agent, user_message: str, max_turns: int = 10
                 tool_res = f"Error: Invalid JSON for tool {t_name}"
             else:
                 if t_name in current_agent.tools_map:
+                    tool_start = time.perf_counter()
                     try:
                         tool_res = current_agent.tools_map[t_name](**t_args)
+                        status = "success"
                     except Exception as e:
                         tool_res = f"Error executing {t_name}: {e}"
+                        status = "error"
+                    tool_latency_ms = (time.perf_counter() - tool_start) * 1000
                 else:
                     tool_res = f"Error: Tool {t_name} not found on agent {current_agent.name}"
+                    tool_latency_ms = 0.0
+                    status = "error"
             
             # HANDOFF DETECTION: Did the tool return another Agent?
             if isinstance(tool_res, Agent):
@@ -780,6 +809,15 @@ def run_swarm_loop(starting_agent: Agent, user_message: str, max_turns: int = 10
                     to_agent=new_agent.name,
                     reason=f"Transferred via tool '{t_name}'"
                 ))
+                # Log Handoff Span
+                db_log_trace(
+                    trace_id=trace_id,
+                    step_type="handoff",
+                    name=f"Handoff: {current_agent.name} -> {new_agent.name}",
+                    latency_ms=0.0,
+                    input_data={"from": current_agent.name, "to": new_agent.name}
+                )
+
                 # STATE TRANSITION: Swap active agent and update system prompt
                 current_agent = new_agent
                 messages[0] = {"role": "system", "content": current_agent.system_prompt}
@@ -789,6 +827,16 @@ def run_swarm_loop(starting_agent: Agent, user_message: str, max_turns: int = 10
                 tool_msg_content = f"Transferred to {new_agent.name}. You are now in control. Execute your tools to fulfill the user's request: '{user_message}'"
             else:
                 tool_msg_content = str(tool_res)
+                # Log Tool Execution Span
+                db_log_trace(
+                    trace_id=trace_id,
+                    step_type="tool_execution",
+                    name=t_name,
+                    latency_ms=tool_latency_ms,
+                    input_data=t_args,
+                    output_data=tool_msg_content,
+                    status=status
+                )
             
             messages.append({
                 "role": "tool",
@@ -799,6 +847,7 @@ def run_swarm_loop(starting_agent: Agent, user_message: str, max_turns: int = 10
         turn += 1
     
     return SwarmResponse(
+        trace_id=trace_id,
         final_agent=current_agent.name,
         handoff_history=handoff_history,
         final_response="Swarm exceeded maximum turns."
@@ -1233,3 +1282,33 @@ def get_session_summary(session_id: str):
 def get_relevant_memories(req: ChatRequest):
     query_vector = get_embedding(req.message)
     return db_search_memories(query_vector, top_k=3, threshold=0.3)
+
+
+# Trace Inspection Endpoint
+class TraceSummary(BaseModel):
+    trace_id: str
+    total_steps: int
+    total_prompt_tokens: int
+    total_completion_tokens: int
+    total_latency_ms: float
+    steps: list[dict]
+
+@app.get("/traces/{trace_id}", response_model=TraceSummary)
+def get_trace_details(trace_id: str):
+    """Retrieve full chronological execution breakdown and metrics for a given trace_id."""
+    steps = db_get_trace(trace_id)
+    if not steps:
+        raise HTTPException(status_code=404, detail="Trace ID not found.")
+    
+    p_tokens = sum(s.get("prompt_tokens",0) for s in steps)
+    c_tokens = sum(s.get("completion_tokens",0) for s in steps)
+    tot_latency = sum(s.get("latency_ms",0.0) for s in steps)
+
+    return TraceSummary(
+        trace_id=trace_id,
+        total_steps=len(steps),
+        total_prompt_tokens=p_tokens,
+        total_completion_tokens=c_tokens,
+        total_latency_ms=round(tot_latency, 2),
+        steps=steps
+    )
