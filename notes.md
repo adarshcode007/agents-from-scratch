@@ -294,3 +294,16 @@ Sample Output:
 }
 
 ```
+
+
+### POST /multi-agent/stream
+
+Sample input:
+```json
+{
+  "message": "I need to check our notes for any database downtime issues, and then schedule a follow-up meeting with sales for tomorrow."
+}
+```
+
+Sample Output: (check in postman)
+

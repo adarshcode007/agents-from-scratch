@@ -9,6 +9,7 @@ from embeddings import get_embedding
 from typing import Literal
 from uuid import uuid4
 import time
+from fastapi.responses import StreamingResponse
 
 from db import (
     init_db, db_save_note, db_search_notes, db_save_message,
@@ -770,7 +771,7 @@ def run_swarm_loop(starting_agent: Agent, user_message: str, max_turns: int = 10
             completion_tokens=c_tokens,
         )
 
-        # If no tools are called, the active agent gavt the final answer directly to the user
+        # If no tools are called, the active agent gave the final answer directly to the user
         if not resp_msg.tool_calls:
             return SwarmResponse(
                 trace_id=trace_id,
@@ -852,6 +853,101 @@ def run_swarm_loop(starting_agent: Agent, user_message: str, max_turns: int = 10
         handoff_history=handoff_history,
         final_response="Swarm exceeded maximum turns."
     )
+
+
+def stream_swarm_events(starting_agent: Agent, user_message: str, max_turns: int = 10):
+    """
+    Generator that streams real-time SSE events for multi-agent execution:
+    - Status & Handoff updates
+    - Tool execution progress
+    - Real-time token streaming for final answer
+    """
+    trace_id = f"tr_{uuid4().hex[:8]}"
+    current_agent = starting_agent
+
+    messages = [
+        {"role": "system", "content": current_agent.system_prompt},
+        {"role": "user", "content": user_message}
+    ]
+
+    # Helper to yield formatted SSE lines
+    def sse(event_type: str, data: dict) -> str:
+        payload = {"type": event_type, "trace_id": trace_id,**data}
+        return f"data: {json.dumps(payload)}\n\n"
+    
+    yield sse("status", {"message": f"Started workflow with {current_agent.name}..."})
+
+    turn = 0
+    while turn < max_turns:
+        # 1. Non-streaming check to see if the agent needs tools
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=messages,
+            tools=current_agent.tools_schema if current_agent.tools_schema else None
+        )
+        resp_msg = completion.choices[0].message
+
+        # 2. IF TOOLS ARE CALLED: Yield status events and execute tools
+        if resp_msg.tool_calls:
+            messages.append(resp_msg)
+            for tool_call in resp_msg.tool_calls:
+                t_name = tool_call.function.name
+                try:
+                    t_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                except json.JSONDecodeError:
+                    tool_res = f"Error: Invalid JSON for tool {t_name}"
+                else:
+                    yield sse("tool_start", {"tool": t_name, "args": t_args})
+                    if t_name in current_agent.tools_map:
+                        try:
+                            tool_res = current_agent.tools_map[t_name](**t_args)
+                        except Exception as e:
+                            tool_res = f"Error: {e}"
+                    else:
+                        tool_res = f"Error: Tool {t_name} not found"
+                
+                # Check if it was a handoff
+                if isinstance(tool_res, Agent):
+                    new_agent = tool_res
+                    yield sse("handoff", {
+                        "from_agent": current_agent.name,
+                        "to_agent": new_agent.name,
+                        "message": f"Handing off conversation to {new_agent.name}..."
+                    })
+                    current_agent = new_agent
+                    messages[0] = {"role": "system", "content": current_agent.system_prompt}
+                    tool_msg_content = f"Transferred to {new_agent.name}. Execute your tools to fulfill: '{user_message}'"
+                else:
+                    tool_msg_content = str(tool_res)
+                    yield sse("tool_done", {"tool": t_name, "result": tool_msg_content[:150]})
+                
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": t_name,
+                    "content": tool_msg_content
+                })
+            turn += 1
+            continue
+
+        # 3. FINAL ANSWER: Stream text tokens in real time!
+        else:
+            yield sse("status", {"message": f"{current_agent.name} is generating final response..."})
+            stream_completion = client.chat.completions.create(
+                model="openai/gpt-oss-20b",
+                messages=messages,
+                stream=True
+            )
+
+            for chunk in stream_completion:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    token = chunk.choices[0].delta.content
+                    yield sse("token", {"content": token})
+            
+            yield sse("done", {"message": "Execution complete", "final_agent": current_agent.name})
+            return
+        
+    yield sse("error", {"message": "Swarm exceeded maximum turns."})
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -1251,13 +1347,23 @@ class SwarmRequest(BaseModel):
     message: str
 
 @app.post("/multi-agent/swarm", response_model=SwarmResponse)
-def handle_warm_chat(req: SwarmRequest):
+def handle_swarm_chat(req: SwarmRequest):
     """
     Agent Handoff / Swarm Endpoint:
     Starts at TriageAgent and dynamically transfers control based on user intent.
     """
     return run_swarm_loop(starting_agent=triage_agent, user_message=req.message)
 
+@app.post("/multi-agent/stream")
+def stream_swarm_chat(req: SwarmRequest):
+    """
+    Server-Sent Events (SSE) Streaming Endpoint:
+    Streams live status, handoff events, tool execution, and tokens.
+    """
+    return StreamingResponse(
+        stream_swarm_events(starting_agent=triage_agent, user_message=req.message),
+        media_type="text/event-stream"
+    )
 
 @app.get("/notes", response_model=list[str])
 def get_all_notes():
