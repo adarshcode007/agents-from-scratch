@@ -277,6 +277,37 @@
 
 ---
 
+### Q39: What does the `yield` statement do in a pytest fixture (e.g., `conftest.py`)?
+**A:** 
+- **Setup vs. Teardown Separation (The Execution Sandwich)**:
+  - A fixture containing `yield` splits lifecycle management into two phases:
+    1. **Setup (Code BEFORE `yield`)**: Executes *before* the tests run. In our case: overrides `db.DB_FILE = "test_assistant.db"` and creates fresh schema tables with `db.init_db()`.
+    2. **Execution Point (`yield`)**: Pauses the fixture and hands execution over to `pytest` to run the test suite.
+    3. **Teardown (Code AFTER `yield`)**: Automatically executes *after* all tests finish (even if tests failed or crashed). In our case: cleans up and deletes `test_assistant.db` from disk.
+- **Why not `return`?**: A standard `return` immediately terminates the function, making it impossible to clean up temporary test files, close database pools, or reset mocked environment variables after tests complete.
+
+---
+
+### Q40: What core rules and best practices must be followed when writing Pytest suites?
+**A:** 
+- **1. Strict Naming Conventions (Test Discovery)**:
+  - Test files must be named `test_*.py` or `*_test.py`.
+  - Test functions must start with `test_*`.
+  - Test classes must be named `Test*` (and must not have an `__init__` constructor).
+  - Shared fixtures must live in `conftest.py` files (automatically discovered by pytest across subdirectories).
+- **2. Fixture Lifecycle & Scopes**:
+  - `scope="function"` (default): Runs setup/teardown before/after *every single test function*.
+  - `scope="session"`: Runs once across the entire pytest session (ideal for spinning up test databases or FastAPI TestClients).
+  - `autouse=True`: Automatically applies the fixture to every test without needing to explicitly inject it as a function argument.
+- **3. State Isolation & Idempotence**:
+  - Tests must never mutate or depend on production databases (always use temporary SQLite databases or rollback transactions).
+  - Tests must be strictly **order-independent**: Test B must never rely on data created by Test A. Each test creates its own unique IDs (e.g., `uuid4()`).
+- **4. Native Python Assertions**:
+  - Use plain Python `assert condition, "Failure explanation"` instead of verbose JUnit-style `self.assertEqual(...)`. Pytest's AST rewriting automatically prints detailed operand diffs on failures.
+- **5. Agent Eval Testing Discipline**:
+  - Distinguish between **Deterministic Unit Tests** (testing tool execution & database mutations) vs. **Stochastic Eval Tests** (evaluating LLM reasoning, routing, and open-ended text quality).
+
+
 
 
 
