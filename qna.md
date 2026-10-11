@@ -307,6 +307,53 @@
 - **5. Agent Eval Testing Discipline**:
   - Distinguish between **Deterministic Unit Tests** (testing tool execution & database mutations) vs. **Stochastic Eval Tests** (evaluating LLM reasoning, routing, and open-ended text quality).
 
+---
+
+### Q41: Why is `temperature=0.0` mandatory for LLM-as-a-Judge, and what is Self-Preference Bias in agent evaluations?
+**A:** 
+- **Deterministic Grading (`temperature=0.0`)**:
+  - In CI/CD evaluation pipelines, tests must be strictly **reproducible**. If your prompt and code have not changed, running `pytest` 10 times must yield the exact same grade every time. Setting `temperature=0.0` forces greedy token decoding, eliminating stochastic variance in the Judge's ratings.
+- **Self-Preference Bias (The Grading Blind Spot)**:
+  - When an LLM evaluates its own outputs (or outputs from the same model family), it exhibits a systemic bias favoring its own syntactical habits, phrasing patterns, and reasoning shortcuts, often rating its own flawed responses higher than responses from other models.
+- **Production Mitigations**:
+  1. **Asymmetric Judge Hierarchy**: Always use a significantly stronger, larger model as the Judge (e.g. Claude 3.5 Sonnet or GPT-4o evaluating a smaller 8B/20B worker model).
+  2. **Cross-Family Verification**: Employ an ensemble of judges from different model families for critical production evaluations.
+  3. **Strict, Few-Shot Rubrics**: Ground the Judge with concrete rubric benchmarks (e.g. explicit definitions and examples of what constitutes a "Score 1" vs. "Score 5") to minimize subjective drift.
+
+---
+
+### Q42: Why do agent systems use non-streaming calls for intermediate tool checks and only stream final text responses?
+**A:** 
+- **1. Incomplete / Fragmented JSON Syntax**:
+  - When an LLM streams a tool call with `stream=True`, it does not emit complete JSON objects. It streams the JSON argument string character-by-character across multiple delta packets:
+    - Chunk 1: `tool_calls: [{"function": {"name": "search_notes", "arguments": "{\"qu"}}]`
+    - Chunk 2: `tool_calls: [{"function": {"arguments": "ery\": \"data"}}]`
+    - Chunk 3: `tool_calls: [{"function": {"arguments": "base\"}"}}]`
+  - You cannot pass half-baked strings like `{"qu` to `json.loads()` or Python functions without throwing syntax errors. The server would have to accumulate and buffer all chunks in memory until the stream finishes anyway before executing the tool.
+- **2. Agentic UX vs. Raw Syntax Dumps**:
+  - End users should never see raw JSON tokens or machine syntax flickering across their chat screen.
+  - Users want high-level, human-friendly status badges (e.g. SSE event: `{"type": "tool_start", "tool": "search_notes"}`).
+- **The Optimal Architectural Pattern**:
+  - Run the cognitive tool decision with `stream=False` (or buffer internally).
+  - Execute the tool and emit clean event packets (`tool_start`, `handoff`, `tool_done`).
+  - Only when the agent decides it is ready to speak to the user, switch to `stream=True` to stream conversational text tokens.
+
+---
+
+### Q43: How do subtle prompt modifications introduce "Hidden Regressions" in multi-agent systems, and why do unit tests miss them?
+**A:** 
+- **Attention Cannibalization & Instruction Drift**:
+  - LLM attention is zero-sum. When a developer modifies an agent's prompt (e.g. adding instructions to make `SupportAgent` "extra warm, empathetic, and conversational"), the model shifts its token probabilities toward conversation and comfort.
+  - As an unintended side effect, the agent may begin answering sales questions itself rather than calling `transfer_to_sales`, or become overly verbose and fail conciseness constraints.
+- **Why Isolated Unit Tests Miss It**:
+  - A deterministic unit test like `test_eval_save_note_tool` presents an unambiguous, single-purpose prompt (`"Please save this note"`). It passes easily because there is no conflicting conversational context.
+- **Why Full Eval Suites & LLM Judges Catch It**:
+  - **Swarm Routing Tests**: Enforce state-machine boundaries, ensuring the agent doesn't hoard tickets outside its domain.
+  - **Negative Constraint Tests**: Ensure the agent doesn't trigger unexpected side effects when simply chatting.
+  - **LLM-as-a-Judge**: Evaluates multi-dimensional rubrics (e.g. balancing empathy WITH conciseness and technical accuracy).
+
+
+
 
 
 

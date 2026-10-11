@@ -104,3 +104,75 @@ def test_eval_trace_observability_logged(client):
     assert metrics["total_latency_ms"] > 0
     assert len(metrics["steps"]) >= 1
 
+# SUITE 5: LLM-as-a-Judge (Qualitative & Stochastic Evals)
+def test_judge_eval_customer_support_empathy(client):
+    """
+    Judge Eval: Customer experiencing high-stakes downtime must receive
+    an empathetic, professional response with urgent de-escalation.
+    """
+    session_id=f"test_{uuid4().hex[:8]}"
+    urgent_prompt= "My production database has been crashing during our biggest sale! We are losing thousands of dollars every minute!"
+
+    # 1. Get the agent's response
+    agent_resp = client.post("/chat", json={
+        "session_id": session_id,
+        "message": urgent_prompt
+    })
+    assert agent_resp.status_code == 200
+    agent_text = agent_resp.json()["response"]
+
+    # 2. Define the qualitative rubric for the judge
+    empathy_rubric = (
+        "The agent must acknowledge the customer's severe distress and financial risk with empathy, "
+        "maintain an urgent and reassuring professional tone, apologize for the disruption, "
+        "and provide clear, immediate actionable next steps or diagnostics without deflecting."
+    )
+
+    # 3. Ask the Judge to grade the response
+    judge_resp = client.post("/evaluate/judge", json={
+        "user_prompt": urgent_prompt,
+        "agent_response": agent_text,
+        "rubric": empathy_rubric,
+        "min_score": 4
+    })
+    assert judge_resp.status_code == 200
+    verdict = judge_resp.json()
+
+    # 4. Assert Judge criteria
+    print(f"\n[Judge Score: {verdict['score']}/5] Reasoning: {verdict['reasoning']}")
+    assert verdict["passed"] is True, f"Judge failed response: {verdict['reasoning']}"
+    assert verdict["score"] >= 4
+
+def test_judge_eval_factual_conciseness(client):
+    """
+    Judge Eval: The agent must provide an accurate, non-hallucinated definition
+    of vector embedding strictly in 2 sentences or fewer.
+    """
+    session_id = f"test_{uuid4().hex[:8]}"
+    prompt = "Explain what vector embeddings are in exactly 2 simple sentences."
+
+    agent_resp = client.post("/chat", json={
+        "session_id": session_id,
+        "message": prompt
+    })
+    assert agent_resp.status_code == 200
+    agent_text = agent_resp.json()["response"]
+
+    conciseness_rubric = (
+        "The explanation must be technically accurate (numbers representing semantic meaning in multi-dimensional space), "
+        "must be strictly 2 sentences or fewer, free of hallucinations, and easy for a beginner to understand."
+    )
+
+    judge_resp = client.post("/evaluate/judge", json={
+        "user_prompt": prompt,
+        "agent_response": agent_text,
+        "rubric": conciseness_rubric,
+        "min_score": 4
+    })
+    assert judge_resp.status_code == 200
+    verdict = judge_resp.json()
+
+    print(f"\n[Judge Score: {verdict['score']}/5] Reasoning: {verdict['reasoning']}")
+    assert verdict['passed'] is True, f"Judge failed response: {verdict['reasoning']}"
+    assert verdict['score'] >= 4
+

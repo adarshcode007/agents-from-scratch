@@ -1365,6 +1365,74 @@ def stream_swarm_chat(req: SwarmRequest):
         media_type="text/event-stream"
     )
 
+
+# JUDGE EVALUATION
+class JudgeEvaluation(BaseModel):
+    score: int
+    passed: bool
+    reasoning: str
+
+class JudgeRequest(BaseModel):
+    user_prompt: str
+    agent_response: str
+    rubric: str
+    min_score: int = 4
+
+def evaluate_with_judge(user_prompt: str, agent_response: str, rubric: str, min_score: int = 4) -> JudgeEvaluation:
+    """
+    Impartial LLM Judge that scores an agent response against a qualitative rubric using strict
+    JSON mode and temperature=0.0 (deterministic scoring).
+    """
+    eval_prompt = f"""
+        EVALUATION TASK:
+        User Prompt: \"\"\"{user_prompt}\"\"\"
+        Agent Response: \"\"\"{agent_response}\"\"\"
+        Evaluation Rubric: \"\"\"{rubric}\"\"\"
+
+        Minimum Passing Score: {min_score} out of 5.
+
+        Evaluate the response against the rubric. Output a JSON object with:
+        - 'score': integer from 1 to 5
+        - 'passed': boolean (true if score >= {min_score}, else false)
+        - 'reasoning': concise explanation justifying the score based on rubric criteria.
+    """
+
+    completion = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict, impartial AI Evaluator and Judge."
+                    "Grade the candidate response against the specified rubric."
+                    "Return ONLY a valid JSON object with keys: 'score', 'passed', and 'reasoning'."
+                )
+            },
+            {"role": "user", "content": eval_prompt}
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.0  # Crucial: 0.0 temperature for deterministic grading
+    )
+
+    data = json.loads(completion.choices[0].message.content)
+    return JudgeEvaluation(
+        score=int(data.get("score", 1)),
+        passed=bool(data.get("passed", False)),
+        reasoning=str(data.get("reasoning", "No reasoning provided"))
+    )
+
+
+@app.post("/evaluate/judge", response_model=JudgeEvaluation)
+def run_judge_eval(req: JudgeRequest):
+    """API endpoint to run LLM-as-a-Judge evaluation on any prompt & response pair."""
+    return evaluate_with_judge(
+        user_prompt=req.user_prompt,
+        agent_response=req.agent_response,
+        rubric=req.rubric,
+        min_score=req.min_score
+    )
+
+
 @app.get("/notes", response_model=list[str])
 def get_all_notes():
     return db_search_notes("")

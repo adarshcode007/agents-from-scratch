@@ -4,10 +4,10 @@ This document maps out the essential competencies, architectural patterns, and p
 
 ---
 
-## 📍 Current Status: `Phase 4 (Production Engineering, Observability & Evals)` — Ready to Start 🚀
+## 📍 Current Status: `Phase 5 (Advanced RAG)` — Ready to Start 🚀
 
 ```
-[✅ Phase 0] ──▶ [✅ Phase 1] ──▶ [✅ Phase 2] ──▶ [✅ Phase 3] ──▶ [🟡 Phase 4] ──▶ [⏳ Phase 5] ──▶ [💼 Portfolio]
+[✅ Phase 0] ──▶ [✅ Phase 1] ──▶ [✅ Phase 2] ──▶ [✅ Phase 3] ──▶ [✅ Phase 4] ──▶ [🟡 Phase 5] ──▶ [💼 Portfolio]
 Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Production Ops    Advanced RAG      Capstones
 ```
 
@@ -56,17 +56,17 @@ Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Productio
 
 ---
 
-### Phase 4: Production Engineering, Observability & Evals (IN PROGRESS ⏳)
+### Phase 4: Production Engineering, Observability & Evals (COMPLETED ✅)
 *What differentiates an amateur hobbyist from a senior Applied AI Engineer.*
 - [x] **Tracing & Observability**: Logging step-by-step token usage, tool latency, and agent thoughts to a structured telemetry table or dashboard (e.g. Langfuse / OpenTelemetry).
 - [x] **Streaming Responses (SSE / WebSockets)**: Streaming tokens and real-time tool execution status to the frontend.
 - [x] **Automated Eval Suites (CI/CD for Agents)**: Writing 15–20 deterministic benchmark tests (e.g., verifying that prompt $X$ triggered tool $Y$ with parameter $Z$ and left the database in state $S$).
-- [ ] **LLM-as-a-Judge Evaluation**: Programmatically grading response quality, accuracy, and tone against gold-standard rubrics.
+- [x] **LLM-as-a-Judge Evaluation**: Programmatically grading response quality, accuracy, and tone against gold-standard rubrics.
 
 
 ---
 
-### Phase 5: Advanced RAG (Retrieval-Augmented Generation) (UPCOMING ⏳)
+### Phase 5: Advanced RAG (Retrieval-Augmented Generation) (IN PROGRESS ⏳)
 *Connecting agents to large external unstructured knowledge bases.*
 - [ ] **Document Chunking & Embedding Strategies**: Parent-document retrieval, recursive text splitting, and metadata enrichment.
 - [ ] **Hybrid Search (Dense + Sparse)**: Combining BM25 keyword search with vector semantic search using Reciprocal Rank Fusion (RRF).

@@ -307,3 +307,7 @@ Sample input:
 
 Sample Output: (check in postman)
 
+### Tests
+
+Command:
+`python -m pytest -v -s`
