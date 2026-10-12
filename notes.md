@@ -311,3 +311,104 @@ Sample Output: (check in postman)
 
 Command:
 `python -m pytest -v -s`
+
+
+## RAG
+### POST /rag/ingest
+
+Sample Input:
+```json
+{
+    "doc_id": "server_runbook_v1",
+    "title": "Database Incident Response Runbook",
+    "content": "SECTION 1: DATABASE CONNECTION POOLING.\nWhen PostgreSQL reports error ERR_502, it indicates client connection starvation. To recover, administrators must immediately run pg_terminate_backend on idle transactions and scale pgBouncer max_client_conn to 500.\n\nSECTION 2: REPLICATION LAG AND FAILOVER.\nIf replication lag on the read-replica exceeds 60 seconds during high traffic, do not promote the replica immediately. First check network packet loss on port 5432, verify WAL receiver disk space, and check disk I/O wait times before triggering an automated failover."
+  }
+```
+
+Sample Output:
+```json
+{
+    "message": "Document successfully ingested",
+    "stats": {
+        "doc_id": "server_runbook_v1",
+        "title": "Database Incident Response Runbook",
+        "parents_count": 1,
+        "children_count": 5
+    }
+}
+```
+
+### POST /rag/search
+
+Sample Input:
+```json
+{"query": "How do I fix error ERR_502?", "top_k": 2}
+```
+
+Sample Ouput:
+```json
+{
+    "query": "How do I fix error ERR_502?",
+    "matches_count": 1,
+    "results": [
+        {
+            "parent_id": "server_runbook_v1_p0_29c90d",
+            "doc_id": "server_runbook_v1",
+            "title": "Database Incident Response Runbook",
+            "parent_content": "SECTION 1: DATABASE CONNECTION POOLING.\nWhen PostgreSQL reports error ERR_502, it indicates client connection starvation. To recover, administrators must immediately run pg_terminate_backend on idle transactions and scale pgBouncer max_client_conn to 500.\n\nSECTION 2: REPLICATION LAG AND FAILOVER.\nIf replication lag on the read-replica exceeds 60 seconds during high traffic, do not promote the replica immediately. First check network packet loss on port 5432, verify WAL receiver disk space, and check disk I/O wait times before triggering an automated failover.",
+            "matched_child_snippet": "When PostgreSQL reports error ERR_502, it indicates client connection starvation. To recover, administrators must immediately run pg_terminate_backend on idle transactions and scale pgBouncer max_client_conn to 500.",
+            "score": 0.779
+        }
+    ]
+}
+```
+
+### POST /rag/hybrid-search
+
+Sample Ouput:
+```json
+{
+    "query": "How to fix ERR_502 with pgBouncer?",
+    "matches_count": 1,
+    "results": [
+        {
+            "parent_id": "server_runbook_v1_p0_29c90d",
+            "doc_id": "server_runbook_v1",
+            "title": "Database Incident Response Runbook",
+            "parent_content": "SECTION 1: DATABASE CONNECTION POOLING.\nWhen PostgreSQL reports error ERR_502, it indicates client connection starvation. To recover, administrators must immediately run pg_terminate_backend on idle transactions and scale pgBouncer max_client_conn to 500.\n\nSECTION 2: REPLICATION LAG AND FAILOVER.\nIf replication lag on the read-replica exceeds 60 seconds during high traffic, do not promote the replica immediately. First check network packet loss on port 5432, verify WAL receiver disk space, and check disk I/O wait times before triggering an automated failover.",
+            "matched_child_snippet": "When PostgreSQL reports error ERR_502, it indicates client connection starvation. To recover, administrators must immediately run pg_terminate_backend on idle transactions and scale pgBouncer max_client_conn to 500.",
+            "rrf_score": 0.03279,
+            "dense_rank": 1,
+            "sparse_rank": 1,
+            "dense_score": 0.8106,
+            "bm25_score": 3.8374
+        }
+    ]
+}
+```
+
+Input:
+```json
+{"query": "What should I do during replication delay under heavy load?", "top_k": 2}
+```
+Output:
+```json
+{
+    "query": "What should I do during replication delay under heavy load?",
+    "matches_count": 1,
+    "results": [
+        {
+            "parent_id": "server_runbook_v1_p0_29c90d",
+            "doc_id": "server_runbook_v1",
+            "title": "Database Incident Response Runbook",
+            "parent_content": "SECTION 1: DATABASE CONNECTION POOLING.\nWhen PostgreSQL reports error ERR_502, it indicates client connection starvation. To recover, administrators must immediately run pg_terminate_backend on idle transactions and scale pgBouncer max_client_conn to 500.\n\nSECTION 2: REPLICATION LAG AND FAILOVER.\nIf replication lag on the read-replica exceeds 60 seconds during high traffic, do not promote the replica immediately. First check network packet loss on port 5432, verify WAL receiver disk space, and check disk I/O wait times before triggering an automated failover.",
+            "matched_child_snippet": "SECTION 2: REPLICATION LAG AND FAILOVER.",
+            "rrf_score": 0.03252,
+            "dense_rank": 1,
+            "sparse_rank": 2,
+            "dense_score": 0.8315,
+            "bm25_score": 1.2216
+        }
+    ]
+}
+```

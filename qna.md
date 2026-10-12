@@ -352,6 +352,77 @@
   - **Negative Constraint Tests**: Ensure the agent doesn't trigger unexpected side effects when simply chatting.
   - **LLM-as-a-Judge**: Evaluates multi-dimensional rubrics (e.g. balancing empathy WITH conciseness and technical accuracy).
 
+---
+
+### Q44: What is the "Semantic Dilution" problem in naive vector search, and why is document chunking mandatory?
+**A:** 
+- **The Information Bottleneck of Embedding Vectors**:
+  - An embedding vector has a fixed mathematical dimensionality (e.g., 384 or 1536 floating-point numbers).
+  - When you compress a 50-page document into a single vector, the vector can only capture the broad, generic topic of the whole text. Individual specific facts, clause numbers, names, or error codes get washed out ("semantically diluted") into a generic average.
+  - A user searching for a pinpoint question (e.g., *"What is the penalty fee in Section 4.2?"*) will have a very low cosine similarity score against a 50-page vector that talks about dozens of other topics.
+- **Context Window & Cost Waste**:
+  - Even if the document vector were retrieved, you would have to stuff the entire 50-page text into the LLM's prompt. This explodes token costs, increases latency, and triggers the "Lost in the Middle" phenomenon where the LLM overlooks facts buried in huge context.
+- **The Solution (Chunking)**:
+  - Splitting large documents into coherent semantic segments (e.g., 300–800 tokens) with overlap preserves sharp, high-fidelity embeddings for exact keyword and semantic matches.
+
+---
+
+### Q45: Why can't you run LLM-as-a-Judge on 100% of live production traffic, and what is the "Eval Flywheel"?
+**A:** 
+- **Why Real-Time 100% Judging is Prohibitive**:
+  1. **Cost Explosion**: Running a secondary LLM call to judge every incoming user query would double or triple your API bill.
+  2. **Latency Penalty**: Adding an extra synchronous LLM call before returning an answer would add 1.5–3 seconds of latency to the user experience.
+- **The Production Architecture: Sampled & Anomaly-Based Evaluation**:
+  - Rather than judging everything synchronously, production pipelines evaluate asynchronously in the background.
+  - Teams sample a subset (e.g. 1% to 5% of daily traffic), or prioritize **anomalous traces** from the `traces` table (e.g., sessions with user thumbs-down, high loop turns, or tool execution errors).
+- **The "Eval Flywheel" (Turning Production Failures into CI/CD Tests)**:
+  - When a sampled trace or user complaint reveals a failure in production (e.g. the agent gave inaccurate advice or misrouted a ticket):
+    1. Extract the exact user prompt and context from the production trace.
+    2. Write a gold-standard rubric and expected outcome.
+    3. Add it as a permanent test case in your offline `pytest` eval suite.
+  - **The Result**: A self-improving engineering loop that guarantees the agent can never regress or repeat that specific production mistake in future releases.
+
+---
+
+### Q46: Why is `chunk_overlap` essential in text chunking pipelines?
+**A:** 
+- **The "Boundary Fracture" Problem**:
+  - Natural human thoughts, legal clauses, and multi-sentence facts do not align neatly to arbitrary character or token limits.
+  - If `chunk_overlap = 0`, a critical sentence or definition that straddles the boundary gets split down the middle (e.g. Subject in Chunk $N$, Action & Object in Chunk $N+1$).
+  - Neither chunk will have a complete semantic representation, causing the embedding vector to score poorly during cosine similarity search and failing to retrieve the answer.
+- **The Continuity Bridge**:
+  - Setting a sliding window overlap (e.g. 50–100 characters for parents, 20–50 characters for children) ensures that whatever concept is introduced at the end of Chunk $A$ is repeated at the beginning of Chunk $B$.
+  - This guarantees that at least one chunk captures the complete, unbroken thought intact with high semantic fidelity.
+
+---
+
+### Q47: Why is Parent Chunk Deduplication critical in Parent-Document (Small-to-Big) Retrieval?
+**A:** 
+- **1. Context Window Starvation (The Diversity Bottleneck)**:
+  - If a user query matches 3 adjacent child chunks belonging to the same parent section and you don't deduplicate, your `top_k = 3` retrieval slots will be 100% occupied by 3 duplicate copies of the exact same parent text!
+  - Other genuinely relevant parent documents or troubleshooting chapters from elsewhere in your knowledge base get completely starved out and omitted from the prompt.
+- **2. Token Cost & Latency Waste**:
+  - Stuffing multiple identical copies of a 1,000–2,000 character parent block into the LLM prompt burns unnecessary input tokens and increases time-to-first-token (TTFT) latency.
+- **3. Attention Degradation**:
+  - Redundant duplicate context distracts LLM self-attention heads and increases hallucinations or confused synthesis.
+- **The Optimal Architecture**:
+  - Maintain a `seen_parents` hash set during retrieval. Once a parent is pulled by its highest-scoring child match, skip any sibling children matching that same parent, ensuring maximum diversity of retrieved knowledge.
+
+---
+
+### Q48: In Parent-Document (Small-to-Big) Retrieval, which chunk is injected into the LLM prompt, and how is the matched child snippet utilized?
+**A:** 
+- **1. Inject the Parent Content (`parent_content`) into the LLM Prompt**:
+  - The small child snippet (~200 chars) lacks surrounding context, background definitions, prerequisites, and nuance. If you feed only the child snippet to the LLM, the model may hallucinate because it lacks the full picture.
+  - The parent chunk (~1,000–1,500 chars) contains the entire coherent section (including the child text), giving the LLM rich, unambiguous ground truth to generate a thorough, accurate response.
+- **2. How the Matched Child Snippet is Utilized in Production UX**:
+  - **Explainability & Citation Highlighting**: In the user interface, you can highlight the exact child sentence or display a *"Source Snippet"* pill, showing the user the precise sentence that triggered the answer.
+  - **Verification & Filtering**: Allows guardrails to verify that the generated answer specifically cites the pinpoint claim made in the matched snippet.
+
+
+
+
+
 
 
 

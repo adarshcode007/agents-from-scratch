@@ -1,7 +1,8 @@
 import sqlite3
 import json
 
-from embeddings import cosine_similarity
+from embeddings import get_embedding, cosine_similarity
+from rag import BM25Index, reciprocal_rank_fusion
 
 DB_FILE = "assistant.db"
 
@@ -103,6 +104,31 @@ def init_db():
                 latency_ms REAL NOT NULL,
                 status TEXT DEFAULT 'success',  -- 'success', 'error'
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Table 8: RAG Parent Chunks (Large, rich context for generation)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rag_parents (
+                id TEXT PRIMARY KEY,
+                doc_id TEXT NOT NULL,
+                title text not null,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Table 9: RAG Child Chunks (Small, sharp embeddings for retrieval)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rag_children (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (parent_id) REFERENCES rag_parents(id) ON DELETE CASCADE
             )
         """)
         conn.commit()
@@ -362,3 +388,172 @@ def db_get_trace(trace_id: str) -> list[dict]:
         rows = cursor.fetchall()
         return [dict(r) for r in rows]
 
+# RAG Helpers
+def db_save_rag_document(doc_id: str, title: str, parents: list[dict], children: list[dict]) -> dict:
+    """
+    Persists a document's parent and child chunks into SQLite.
+    Computes vector embeddings for each child chunk.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        # Insert Parent chunks
+        for p in parents:
+            cursor.execute("""
+                INSERT OR REPLACE INTO rag_parents (id, doc_id, title, content)
+                VALUES (?, ?, ?, ?)
+            """, (p["id"], doc_id, title, p["content"]))
+        
+        # 2. Embed and insert Child chunks
+        for c in children:
+            vector = get_embedding(c["content"])
+            cursor.execute("""
+                INSERT OR REPLACE INTO rag_children (id, parent_id, doc_id, title, content, embedding)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (c["id"], c["parent_id"], doc_id, title, c["content"], json.dumps(vector)))
+        conn.commit()
+    return {
+        "doc_id": doc_id,
+        "title": title,
+        "parents_count": len(parents),
+        "children_count": len(children)
+    }
+
+def db_search_rag_parent_child(query_vector: list[float], top_k: int = 3, threshold: float = 0.3) -> list[dict]:
+    """
+    Parent-Document Retrieval:
+    1. Compares query_vector against all small child chunks
+    2. Takes top matching children above the similarity threshold.
+    3. Fetches the associated full PARENT chunks for deduplicated rich LLM context.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, parent_id, doc_id, title, content, embedding FROM rag_children
+        """)
+        children = cursor.fetchall()
+    scored_children = []
+    for c in children:
+        child_vec = json.loads(c["embedding"])
+        sim = cosine_similarity(query_vector, child_vec)
+        if sim >= threshold:
+            scored_children.append({
+                "child_id": c["id"],
+                "parent_id": c["parent_id"],
+                "doc_id": c["doc_id"],
+                "title": c["title"],
+                "child_content": c["content"],
+                "score": sim
+            })
+    
+    # Sort children by similarity score descending
+    scored_children.sort(key=lambda x: x["score"], reverse=True)
+
+    # Deduplicate by parent_id (we don't want duplicate parents if 2 sibling children match)
+    seen_parents = set()
+    results = []
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        for match in scored_children:
+            p_id = match["parent_id"]
+            if p_id in seen_parents:
+                continue
+            seen_parents.add(p_id)
+            cursor.execute("""
+                SELECT id, doc_id, title, content FROM rag_parents WHERE id = ?
+            """, (p_id,))
+            parent = cursor.fetchone()
+            if parent:
+                results.append({
+                    "parent_id": parent["id"],
+                    "doc_id": parent["doc_id"],
+                    "title": parent["title"],
+                    "parent_content": parent["content"],
+                    "matched_child_snippet": match["child_content"],
+                    "score": round(match["score"], 4)
+                })
+            if len(results) >= top_k:
+                break
+    return results
+
+def db_search_hybrid_parent_child(
+    query: str,
+    query_vector: list[float],
+    top_k: int = 3,
+    rrf_k: int = 60
+) -> list[dict]:
+    """
+    Hybrid Search (Dense Cosine + Sparse BM25 + Reciprocal Rank Fusion):
+    1. Runs Dense vector search across child chunks.
+    2. Runs Sparse BM25 keyword search across child chunks.
+    3. Fuses rankings using RRF (Score = 1/(k + rank)).
+    4. Deduplicates and retrieves full PARENT chunks for rich LLM context.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, parent_id, doc_id, title, content, embedding FROM rag_children")
+        children = cursor.fetchall()
+
+    if not children:
+        return []
+    
+    # 1. DENSE VECTOR SEARCH
+    dense_results = []
+    corpus = []
+    for c in children:
+        c_dict = {
+            "id": c["id"],
+            "parent_id": c["parent_id"],
+            "doc_id": c["doc_id"],
+            "title": c["title"],
+            "content": c["content"]
+        }
+        corpus.append(c_dict)
+
+        child_vec = json.loads(c["embedding"])
+        sim = cosine_similarity(query_vector, child_vec)
+        dense_entry = dict(c_dict)
+        dense_entry["score"] = round(sim,4)
+        dense_results.append(dense_entry)
+    dense_results.sort(key=lambda x: x["score"], reverse=True)
+
+    # 2. SPARSE BM25 SEARCH
+    bm25 = BM25Index(corpus=corpus)
+    sparse_results = bm25.search(query=query, top_k=len(corpus))
+
+    # 3. RECIPROCAL RANK FUSION (RRF)
+    fused_results = reciprocal_rank_fusion(
+        dense_results=dense_results,
+        sparse_results=sparse_results,
+        k=rrf_k
+    )
+
+    # 4. PARENT DEDUPLICATION & CONTEXT RETRIEVAL
+    seen_parents = set()
+    final_results = []
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        for match in fused_results:
+            p_id = match["parent_id"]
+            if p_id in seen_parents:
+                continue
+            seen_parents.add(p_id)
+
+            cursor.execute("SELECT id, doc_id, title, content FROM rag_parents WHERE id = ?",(p_id,))
+            parent = cursor.fetchone()
+            if parent:
+                final_results.append({
+                    "parent_id": parent["id"],
+                    "doc_id": parent["doc_id"],
+                    "title": parent["title"],
+                    "parent_content": parent["content"],
+                    "matched_child_snippet": match["content"],
+                    "rrf_score": match["rrf_score"],
+                    "dense_rank": match.get("dense_rank"),
+                    "sparse_rank": match.get("sparse_rank"),
+                    "dense_score": match.get("dense_score"),
+                    "bm25_score": match.get("bm25_score")
+                })
+            if len(final_results) >= top_k:
+                break
+    return final_results

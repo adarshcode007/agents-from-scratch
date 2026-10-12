@@ -10,6 +10,7 @@ from typing import Literal
 from uuid import uuid4
 import time
 from fastapi.responses import StreamingResponse
+from rag import chunk_documents_parent_child
 
 from db import (
     init_db, db_save_note, db_search_notes, db_save_message,
@@ -17,7 +18,8 @@ from db import (
     db_add_task, db_list_tasks, db_complete_task,
     db_get_session_summary, db_update_session_summary, db_get_message_count,
     db_delete_task, db_create_pending_action, db_get_pending_action, db_update_action_status,
-    db_log_trace, db_get_trace
+    db_log_trace, db_get_trace,
+    db_save_rag_document, db_search_rag_parent_child, db_search_hybrid_parent_child
 )
 
 # Load .env file
@@ -1432,6 +1434,72 @@ def run_judge_eval(req: JudgeRequest):
         min_score=req.min_score
     )
 
+
+# RAG: DOCUMENT INGESTION & PARENT-CHILD SEARCH ENDPOINTS
+
+class DocumentIngestRequest(BaseModel):
+    doc_id: str
+    title: str
+    content: str
+    parent_size: int = 1000
+    child_size: int = 250
+
+class RAGSearchRequest(BaseModel):
+    query: str
+    top_k: int = 3
+    threshold: float = 0.3
+
+@app.post("/rag/ingest")
+def ingest_rag_document(req: DocumentIngestRequest):
+    """
+    Inegsts a raw document:
+    1. Splits it into large Parent chunks and small Child chunks.
+    2. Embeds children and stores the hierarchy in SQLite.
+    """
+    chunk_data = chunk_documents_parent_child(
+        text=req.content,
+        doc_id=req.doc_id,
+        title=req.title,
+        parent_size=req.parent_size,
+        child_size=req.child_size
+    )
+    stats = db_save_rag_document(
+        doc_id=chunk_data["doc_id"],
+        title=chunk_data["title"],
+        parents=chunk_data["parents"],
+        children=chunk_data["children"]
+    )
+    return {"message": "Document successfully ingested", "stats": stats}
+
+@app.post("/rag/search")
+def search_rag_knowledge(req: RAGSearchRequest):
+    """
+    Parent-Document Search:
+    Performs cosine search against small child chunks,
+    and returns deduplicated, full-context PARENT chunks.
+    """
+    query_vector = get_embedding(req.query)
+    results = db_search_rag_parent_child(
+        query_vector=query_vector,
+        top_k=req.top_k,
+        threshold=req.threshold
+    )
+    return {"query": req.query, "matches_count": len(results), "results": results}
+
+@app.post("/rag/hybrid-search")
+def hybrid_search_rag_knowledge(req: RAGSearchRequest):
+    """
+    Hybrid Search Endpoint:
+    Combines Dense Vector Search + Sparse BM25 + Reciprocal Rank Fusion (RPF),
+    returning deduplicated full-context Parent chunks.
+    """
+    query_vector = get_embedding(req.query)
+    results = db_search_hybrid_parent_child(
+        query=req.query,
+        query_vector=query_vector,
+        top_k=req.top_k
+    )
+    return {"query": req.query, "matches_count": len(results), "results": results}
 
 @app.get("/notes", response_model=list[str])
 def get_all_notes():

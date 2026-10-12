@@ -68,8 +68,8 @@ Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Productio
 
 ### Phase 5: Advanced RAG (Retrieval-Augmented Generation) (IN PROGRESS ⏳)
 *Connecting agents to large external unstructured knowledge bases.*
-- [ ] **Document Chunking & Embedding Strategies**: Parent-document retrieval, recursive text splitting, and metadata enrichment.
-- [ ] **Hybrid Search (Dense + Sparse)**: Combining BM25 keyword search with vector semantic search using Reciprocal Rank Fusion (RRF).
+- [x] **Document Chunking & Embedding Strategies**: Parent-document retrieval, recursive text splitting, and metadata enrichment.
+- [x] **Hybrid Search (Dense + Sparse)**: Combining BM25 keyword search with vector semantic search using Reciprocal Rank Fusion (RRF).
 - [ ] **Re-ranking & Query Transformation**: Rewriting user queries and applying Cross-Encoder re-rankers to improve top-$K$ precision.
 
 ---
