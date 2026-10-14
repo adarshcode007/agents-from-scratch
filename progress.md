@@ -4,10 +4,10 @@ This document maps out the essential competencies, architectural patterns, and p
 
 ---
 
-## 📍 Current Status: `Phase 5 (Advanced RAG)` — Ready to Start 🚀
+## 📍 Current Status: `Phase 6 (Capstone Projects for Job Applications)` — Ready to Start 🚀
 
 ```
-[✅ Phase 0] ──▶ [✅ Phase 1] ──▶ [✅ Phase 2] ──▶ [✅ Phase 3] ──▶ [✅ Phase 4] ──▶ [🟡 Phase 5] ──▶ [💼 Portfolio]
+[✅ Phase 0] ──▶ [✅ Phase 1] ──▶ [✅ Phase 2] ──▶ [✅ Phase 3] ──▶ [✅ Phase 4] ──▶ [✅ Phase 5] ──▶ [🟡 Phase 6]
 Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Production Ops    Advanced RAG      Capstones
 ```
 
@@ -66,11 +66,11 @@ Core Engine      Memory/Context    Planning/Evals    Multi-Agent       Productio
 
 ---
 
-### Phase 5: Advanced RAG (Retrieval-Augmented Generation) (IN PROGRESS ⏳)
+### Phase 5: Advanced RAG (Retrieval-Augmented Generation) (COMPLETED ✅)
 *Connecting agents to large external unstructured knowledge bases.*
 - [x] **Document Chunking & Embedding Strategies**: Parent-document retrieval, recursive text splitting, and metadata enrichment.
 - [x] **Hybrid Search (Dense + Sparse)**: Combining BM25 keyword search with vector semantic search using Reciprocal Rank Fusion (RRF).
-- [ ] **Re-ranking & Query Transformation**: Rewriting user queries and applying Cross-Encoder re-rankers to improve top-$K$ precision.
+- [x] **Re-ranking & Query Transformation**: Rewriting user queries and applying Cross-Encoder re-rankers to improve top-$K$ precision.
 
 ---
 

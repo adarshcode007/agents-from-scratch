@@ -10,7 +10,7 @@ from typing import Literal
 from uuid import uuid4
 import time
 from fastapi.responses import StreamingResponse
-from rag import chunk_documents_parent_child
+from rag import chunk_documents_parent_child, advanced_rag_search
 
 from db import (
     init_db, db_save_note, db_search_notes, db_save_message,
@@ -1500,6 +1500,30 @@ def hybrid_search_rag_knowledge(req: RAGSearchRequest):
         top_k=req.top_k
     )
     return {"query": req.query, "matches_count": len(results), "results": results}
+
+
+# Advanced RAG
+@app.post("/rag/advanced-search")
+def run_advanced_rag(req: RAGSearchRequest):
+    """
+    Advanced RAG Pipeline:
+    1. Query Transformation (Multi-Query Expansion via LLM).
+    2. Parallel Hybrid Retrieval (Dense Vector + Sparse BM25 + RRF).
+    3. Candidate Pooling & Deduplication across query angles.
+    4. Cross-Encoder Re-ranking to score deep cross-attention relevance.
+    """
+    def hybrid_search_wrapper(query: str, top_k: int = 5):
+        vec = get_embedding(query)
+        return db_search_hybrid_parent_child(
+            query=query,
+            query_vector=vec,
+            top_k=top_k
+        )
+    return advanced_rag_search(
+        query=req.query,
+        search_fn=hybrid_search_wrapper,
+        top_k=req.top_k
+    )
 
 @app.get("/notes", response_model=list[str])
 def get_all_notes():

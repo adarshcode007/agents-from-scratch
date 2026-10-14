@@ -412,3 +412,39 @@ Output:
     ]
 }
 ```
+
+
+### POST /rag/advanced-search
+
+Sample Input:
+```json
+{"query": "Our database crashed during peak traffic, what are the steps to recover connection pooling?", "top_k": 2}
+```
+
+Sample Output:
+```json
+{
+    "original_query": "Our database crashed during peak traffic, what are the steps to recover connection pooling?",
+    "expanded_queries": [
+        "Our database crashed during peak traffic, what are the steps to recover connection pooling?",
+        "PostgreSQL connection pool crash during peak traffic recovery steps error 57P01",
+        "MySQL InnoDB crash during high load connection pool recovery diagnostic steps",
+        "Oracle RAC connection pool recovery after database crash during traffic spike troubleshooting"
+    ],
+    "total_candidates_pooled": 1,
+    "results": [
+        {
+            "parent_id": "server_runbook_v1_p0_29c90d",
+            "doc_id": "server_runbook_v1",
+            "title": "Database Incident Response Runbook",
+            "parent_content": "SECTION 1: DATABASE CONNECTION POOLING.\nWhen PostgreSQL reports error ERR_502, it indicates client connection starvation. To recover, administrators must immediately run pg_terminate_backend on idle transactions and scale pgBouncer max_client_conn to 500.\n\nSECTION 2: REPLICATION LAG AND FAILOVER.\nIf replication lag on the read-replica exceeds 60 seconds during high traffic, do not promote the replica immediately. First check network packet loss on port 5432, verify WAL receiver disk space, and check disk I/O wait times before triggering an automated failover.",
+            "matched_child_snippet": "SECTION 1: DATABASE CONNECTION POOLING.",
+            "rrf_score": 0.03279,
+            "dense_rank": 1,
+            "sparse_rank": 1,
+            "dense_score": 0.7886,
+            "bm25_score": 5.2956
+        }
+    ]
+}
+```

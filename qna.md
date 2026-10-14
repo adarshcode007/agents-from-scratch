@@ -419,10 +419,110 @@
   - **Explainability & Citation Highlighting**: In the user interface, you can highlight the exact child sentence or display a *"Source Snippet"* pill, showing the user the precise sentence that triggered the answer.
   - **Verification & Filtering**: Allows guardrails to verify that the generated answer specifically cites the pinpoint claim made in the matched snippet.
 
+---
 
+### Q49: What is the difference between an Encoder, Bi-Encoder, and Cross-Encoder in Retrieval systems?
+**A:** 
+- **1. What is an Encoder?**:
+  - A Transformer neural network (e.g. BERT, RoBERTa) that processes text tokens and maps them into dense numerical representations (vectors).
+- **2. What is a Bi-Encoder? (Fast Retrieval — Stage 1)**:
+  - *"Bi"* = Two independent encoding passes:
+    - Step 1: Encodes Document $D \to \vec{v}_D$ once during offline ingestion and stores it in the database.
+    - Step 2: At query time, encodes Query $Q \to \vec{v}_Q$.
+    - Step 3: Compares them using a fast vector dot product / cosine similarity ($\vec{v}_Q \cdot \vec{v}_D$).
+  - **Advantage**: Blazingly fast ($\sim 5$ milliseconds across millions of pre-indexed vectors).
+  - **Limitation**: The query and document *never interact inside the transformer layers*. There is zero cross-attention between query words and document words, leading to occasional relevance false positives.
+- **3. What is a Cross-Encoder? (Deep Re-ranking — Stage 2)**:
+  - Both Query and Document are concatenated together as a single input pair: `[CLS] Query [SEP] Document [SEP]`.
+  - Passed simultaneously into the Transformer, allowing every single word in the query to attend directly to every word in the document via full self-attention (Cross-Attention).
+  - Outputs a single, highly accurate relevance score between 0.0 and 1.0.
+  - **Advantage**: Dramatically higher ranking precision than Bi-Encoders.
+  - **Limitation**: Cannot pre-compute embeddings. Running a Cross-Encoder over 1,000,000 documents at query time would require 1,000,000 full neural network passes (taking minutes/hours).
+- **The Two-Stage Industry Standard**:
+  - **Retrieve Fast (Bi-Encoder / Hybrid)**: Pull top 20–50 candidates from 1,000,000 documents in 10ms.
+  - **Re-rank Deep (Cross-Encoder)**: Score only those 20 candidates through a Cross-Encoder in 30ms to place the true #1 winner at the top of the LLM prompt.
 
+---
 
+### Q50: Why does BM25 penalize document length ($b$ parameter), and what is "Verbosity Bias"?
+**A:** 
+- **The "Verbosity Bias" Problem**:
+  - Longer documents (e.g. 50,000-word manuals) naturally repeat words far more times than short, focused 100-word runbooks, simply by virtue of having more text.
+  - If a retrieval algorithm only counts raw keyword frequency, a massive encyclopedia that mentions `"ERR_502"` 5 times in passing footnotes would outrank a concise 1-paragraph troubleshooting runbook dedicated 100% to `"ERR_502"` that only mentions it 3 times.
+- **How BM25 Fixes It with Parameter $b$ ($0 \le b \le 1$, standard $b=0.75$)**:
+  - BM25 normalizes term frequency by comparing document length against the corpus average: $\frac{\text{doc\_len}}{\text{avg\_doc\_len}}$.
+  - If a document is 10x longer than average, its denominator inflates significantly, reducing the score contribution of each keyword match.
+  - If $b=0$, length normalization is turned off completely (reverting to pure term frequency). If $b=1$, full document length scaling is enforced.
+- **Engineering Takeaway**:
+  - $b=0.75$ balances length penalty with term frequency, ensuring short, hyper-focused incident runbooks outrank bloated, multi-topic manuals.
 
+---
+
+### Q51: What is the "Funnel Architecture" (Recall vs. Precision Trade-off) in multi-stage RAG retrieval?
+**A:** 
+- **The Information Retrieval Funnel**:
+  - **Stage 1: High Recall (Casting a Wide Net)**:
+    - Built with fast, coarse algorithms (Bi-Encoders / Vector search + BM25 keyword matching).
+    - We deliberately "over-fetch" (e.g., retrieving `top_k=5` across 4 expanded queries $\to$ pooling 15–20 unique candidate chunks).
+    - **Goal**: Ensure the true ground-truth answer is captured *somewhere* inside the candidate pool, even if initial keyword/vector ranking places it at #12 or #15.
+  - **Stage 2: High Precision (Deep Sifting)**:
+    - Built with expensive, computationally heavy models (Cross-Encoder re-rankers with full cross-attention).
+    - It reads the 15–20 pooled candidates side-by-side with the query, recognizes deep semantic relevance, and promotes the hidden gem at #15 up to **Rank #1**.
+- **Why Not Skip Stage 1 or Stage 2?**:
+  - If you only use Stage 1 with `top_k=2`, you risk omitting the best document due to synonym/phrasing mismatches.
+  - If you run Stage 2 across the whole corpus of 1,000,000 chunks, query latency would jump from milliseconds to minutes.
+  - The two-stage funnel delivers sub-100ms total latency while maintaining state-of-the-art answer precision.
+
+---
+
+### Q52: What is the "Lost in the Middle" phenomenon, and how should retrieved context be ordered in LLM prompts?
+**A:** 
+- **The U-Shaped Attention Curve**:
+  - Stanford and Berkeley research (*Liu et al.*) demonstrated that Transformer language models do not attend to long input context uniformly. They exhibit a distinct **U-shaped attention curve**: models are exceptionally good at retrieving and reasoning over facts placed at the **very beginning** (primacy bias) and the **very end** (recency bias) of the context window.
+  - Facts placed in the middle of long contexts suffer severe degradation, with recall accuracy often dropping by more than 50%.
+- **The Flaw of Naive Sorting**:
+  - If you retrieve 5 chunks and naively concatenate them `[Rank 1, Rank 2, Rank 3, Rank 4, Rank 5]`, or place the context block between lengthy system rules and conversation history, critical evidence can easily end up in the model's attention "blind spot".
+- **The Solution: Outside-In Context Reordering**:
+  - Production RAG systems reorder top-$K$ chunks to place the highest-confidence evidence at the extremes:
+    - **Position 1 (Top of context block)**: Rank 1 (highest relevance)
+    - **Position Last (Bottom of context block, adjacent to the user query)**: Rank 2
+    - **Middle Positions**: Lower-ranked context (Rank 3, 4, 5).
+  - This ensures that the primary evidence directly borders the system prompt or the final user question where attention weights are strongest.
+
+---
+
+### Q53: What is the scalability bottleneck of In-Memory BM25, and how do Persistent Inverted Indexes (e.g. SQLite FTS5 / Elasticsearch) solve it?
+**A:** 
+- **The In-Memory Rebuild Bottleneck**:
+  - In our development code, every incoming search request queries `SELECT * FROM rag_children`, transfers all rows into Python RAM, runs regex tokenization across all documents, and builds the `BM25Index` from scratch on the fly.
+  - At 50 documents, this executes in 1ms. But at 500,000 documents:
+    1. **I/O & Memory Bloat**: Transferring hundreds of megabytes of raw text from disk to Python on every query exhausts RAM.
+    2. **CPU Waste**: Re-tokenizing and calculating term frequencies for 500,000 chunks on every request introduces 5–15 seconds of latency per query.
+- **The Production Architecture: Persistent Inverted Indexes**:
+  - Production search engines (Elasticsearch, Lucene, and **SQLite FTS5**) pre-build an **Inverted Index** on disk once during ingestion:
+    - Traditional storage: `Document -> [List of words]`
+    - Inverted Index storage: `Word -> [Doc1 (count=2), Doc8 (count=1), Doc42 (count=5)]`
+  - When a query for `"ERR_502"` arrives, the database does not scan all 500,000 documents. It performs a sub-millisecond B-tree lookup on the term `"ERR_502"` and immediately retrieves the pointers to the exact matching documents.
+- **Engineering Upgrades**:
+  - **SQLite FTS5 (Full-Text Search 5)**: Built-in SQLite extension enabling BM25 scoring directly inside the database engine in compiled C with zero Python memory overhead (`CREATE VIRTUAL TABLE ... USING fts5(...)`).
+  - **Elasticsearch / Meilisearch / Vespa**: Distributed search clusters designed for enterprise scale with native hybrid fusion.
+
+---
+
+### Q54: What are the architectural trade-offs between Static Pre-Retrieval (Always-On RAG) and Dynamic Agentic Retrieval (RAG as a Tool)?
+**A:** 
+- **1. Latency & Token Economics**:
+  - **Static Pre-Retrieval (Architecture A)**: Runs vector search and BM25 on *every* user message before calling the LLM. If the user says *"Hi"*, *"Thanks"*, or asks to schedule an appointment, the system wastes milliseconds and prompt tokens stuffing irrelevant runbook chunks into the prompt.
+  - **Dynamic Tool Calling (Architecture B)**: The agent acts as an intelligent gatekeeper. Simple conversational turns execute in ~400ms without touching the vector database. RAG latency and token overhead are paid *only* when the agent genuinely needs documentation.
+- **2. The Conversational Follow-Up Problem (Anaphora & Pronouns)**:
+  - If a user asks: *"What was the second command you just told me to run?"*:
+    - **Static Pre-Retrieval Fails**: The backend naively embeds that raw sentence into vector search. Because the sentence contains no keywords about databases or errors, vector search retrieves random garbage chunks and contaminates the prompt.
+    - **Dynamic Agent Tool Calling Succeeds**: The agent inspects its chat history (`messages`), recognizes the user is referencing Turn 1, skips the search tool, and answers accurately from conversation memory.
+- **3. Hallucination Risk vs. Overconfidence**:
+  - **Static RAG Safety**: Guarantees ground-truth documentation is present in the prompt, reducing hallucination for direct Q&A.
+  - **Dynamic RAG Risk**: Small or generalist models can be "overconfident"—they think they know how to fix a database from pre-training and generate an answer without calling `search_knowledge_base`, leading to subtle hallucinations.
+- **Production Standard**:
+  - Use **Dynamic Tool-Calling (Architecture B)**, but reinforce it with strict system prompt routing rules: *"If the user asks ANY question about system runbooks, policies, or technical troubleshooting, you MUST call 'search_knowledge_base' before answering. Never answer technical questions from pre-training memory."*
 
 
 

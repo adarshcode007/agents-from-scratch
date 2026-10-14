@@ -3,6 +3,13 @@ from uuid import uuid4
 import math
 import re
 from collections import Counter
+import json
+from dotenv import load_dotenv
+load_dotenv()
+
+from groq import Groq
+
+rag_client = Groq()
 
 def recursive_character_split(
     text: str,
@@ -251,4 +258,139 @@ def reciprocal_rank_fusion(
     return hybrid_list
 
 
-            
+# QUERY TRANSFORMATION / MULTI-QUERY EXPANSION
+def expand_query_multi_angle(query: str, num_queries: int = 3) -> list[str]:
+    """
+    Query Transformation:
+    Takes an ambiguous or conversational user query and genenrates 3 distinct,
+    techincally-targeted search variations from different perspectives.
+    """
+    prompt = f"""
+        You are an expert search retrieval engineer.
+        Given the user's search query, generate {num_queries} distinct,
+        highly specific search queries to retrieve relevant technical documentation and runbooks.
+        Focus on:
+        1. Exact techinal keywords and error patterns.
+        2. Conceptual synonyms and underlying system causes.
+        3. Diagnostic and operational troubleshooting terms.
+
+        Return ONLY a valid JSON array of {num_queries} strings. Example: {{"queries": ["query 1", "query 2", "query 3"]}}
+
+        User Query: "{query}"
+    """
+    try:
+        completion = rag_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages = [
+                {"role": "system", "content": "You are a query expansion engine. Ouptut only a JSON array of strings."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3
+        )
+        data = json.loads(completion.choices[0].message.content)
+        queries = data.get("queries",[])
+        if isinstance(queries, list) and len(queries) > 0:
+            return [str(q) for q in queries[:num_queries]]
+        return [query]
+    except Exception:
+        # Graceful fallback: return original query if expansion fails
+        return [query]
+
+
+# CROSS-ENCODER RE-RANKER
+def rerank_candidates_cross_encoder(query: str, candidates: list[dict], top_k: int = 3) -> list[dict]:
+    """
+    Cross-Encoder Re-ranking:
+    Evaluates (Query, Candidate) pairs with full cross-attention to score
+    semantic relevance on a continuous scale (0.0 to 1.0)
+    """
+    if not candidates:
+        return []
+    
+    # Prepare candidate snippets for cross-attention evaluation
+    candidate_prompts = []
+    for idx, c in enumerate(candidates):
+        snippet = c.get("matched_child_snippet") or c.get("parent_content","")[:300]
+        candidate_prompts.append(f"[{idx}] {snippet}")
+
+    candidates_text = "\n\n".join(candidate_prompts)
+
+    rerank_prompt = f"""
+        You are a Cross-Encoder Re-ranking model.
+        Evaluate how well candidate document directly answers or provides context for the query.
+        Assign a relevance score from 0.00 (completely irrelevant) to 1.00 (perfect direct answer).
+
+        Query: "{query}"
+
+        Candidates: {candidates_text}
+
+        Output ONLY a JSON object with key "rankings" containing a list of objects with keys "index" (integer) and "relevance_score" (float 0.0 to 1.0).
+        Example: {{"rankings": [{{"index": 0, "relevance_score": 0.95}}, {{"index": 1, "relevance_score": 0.32}}]}}
+    """
+
+    try:
+        completion = rag_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {"role": "system", "content": "You are a strict Cross-Encoder ranking engine. Ouput only JSON."},
+                {"role": "user", "content": rerank_prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.0
+        )
+        raw_res = json.loads(completion.choices[0].message.content)
+        scores_list = raw_res.get("rankings",[]) if isinstance(raw_res, dict) else raw_res
+
+        # Map cross-encoders scores back to candidate dicts
+        for item in scores_list:
+            idx = int(item.get("index"))
+            score = float(item.get("relevance_score", 0.0))
+            if isinstance(idx, int) and 0 <= idx < len(candidates):
+                candidates[idx]["cross_encoder_score"] = round(score, 4)
+
+        # Sort by Cross-Encoder score descending
+        reranked = sorted(candidates, key=lambda x: x.get("cross_encoder_score",0.0),reverse=True)
+        return reranked[:top_k]
+    except Exception:
+        # Fallback: if re-ranking fails, return original candidates
+        return candidates[:top_k]
+
+
+def advanced_rag_search(query: str, search_fn, top_k: int = 3, num_expanded_queries: int = 3) -> dict:
+    """
+    End-to-End Advanced RAG Pipeline:
+    1. Query Transformation (Multi-Query Expansion)
+    2. Parallel / Multi-angle Hybrid Search (Dense + BM25 + RRF)
+    3. Candidate pooling & deduplication across expanded queries
+    4. Cross-Encoder Re-rankinng to pick top_k true winners 
+    """
+    # 1. Expand query into multiple angles
+    expanded_queries = expand_query_multi_angle(query, num_queries=num_expanded_queries)
+    if query not in expanded_queries:
+        expanded_queries.insert(0, query)
+    
+    # 2. Retrieve candidates for each variation using hybrid search
+    candidate_pool = {}
+    for q in expanded_queries:
+        matches = search_fn(query=q, top_k=5)
+        for m in matches:
+            p_id = m["parent_id"]
+            # Keep highest initial score if seen across multiple sub-queries
+            if p_id not in candidate_pool or m.get("rrf_score", 0) > candidate_pool[p_id].get("rrf_score", 0):
+                candidate_pool[p_id] = m
+    pooled_candidates = list(candidate_pool.values())
+
+    # 3. Re-rank pooled candidates with Cross-Encoder
+    final_ranked = rerank_candidates_cross_encoder(
+        query=query,
+        candidates=pooled_candidates,
+        top_k=top_k
+    )
+
+    return {
+        "original_query": query,
+        "expanded_queries": expanded_queries,
+        "total_candidates_pooled": len(pooled_candidates),
+        "results": final_ranked
+    }
